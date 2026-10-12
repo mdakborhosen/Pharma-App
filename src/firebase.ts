@@ -52,16 +52,33 @@ export interface ShopCloudSession {
 }
 
 export const SHOP_CLOUD_SESSION_KEY = 'iqbal_pharmacy_cloud_session_v1';
+export const EXPLICIT_LOGOUT_KEY = 'iqbal_pharmacy_explicit_logout_v1';
+
+export const DEFAULT_SHOP_CLOUD_SESSION: ShopCloudSession = {
+  uid: 'shop_iqbal_mhakbor2001_gmail_com',
+  email: 'mhakbor2001@gmail.com',
+  displayName: 'ইকবাল মাহমুদ (Owner)',
+  shopName: 'ইকবাল ফার্মেসী',
+  phone: '01812-358839',
+  operatorRole: 'owner',
+  loggedInAt: Date.now(),
+};
 
 export function loadSavedShopCloudSession(): ShopCloudSession | null {
   try {
+    if (sessionStorage.getItem(EXPLICIT_LOGOUT_KEY) === '1') {
+      return null;
+    }
     const raw = localStorage.getItem(SHOP_CLOUD_SESSION_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as ShopCloudSession;
-    if (parsed && parsed.uid && parsed.email) return parsed;
-    return null;
+    if (raw) {
+      const parsed = JSON.parse(raw) as ShopCloudSession;
+      if (parsed && parsed.uid && parsed.email) return parsed;
+    }
+    // Automatically restore default shop cloud session even after browser cache clear
+    localStorage.setItem(SHOP_CLOUD_SESSION_KEY, JSON.stringify(DEFAULT_SHOP_CLOUD_SESSION));
+    return DEFAULT_SHOP_CLOUD_SESSION;
   } catch {
-    return null;
+    return DEFAULT_SHOP_CLOUD_SESSION;
   }
 }
 
@@ -70,6 +87,7 @@ export function saveShopCloudSession(session: ShopCloudSession | null): void {
     if (!session) {
       localStorage.removeItem(SHOP_CLOUD_SESSION_KEY);
     } else {
+      sessionStorage.removeItem(EXPLICIT_LOGOUT_KEY);
       localStorage.setItem(SHOP_CLOUD_SESSION_KEY, JSON.stringify(session));
     }
     window.dispatchEvent(
@@ -239,6 +257,11 @@ export async function signInWithGoogle(fallbackEmail = 'mhakbor2001@gmail.com'):
 }
 
 export async function logOutUser() {
+  try {
+    sessionStorage.setItem(EXPLICIT_LOGOUT_KEY, '1');
+  } catch {
+    // ignore
+  }
   saveShopCloudSession(null);
   try {
     await signOut(auth);

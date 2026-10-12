@@ -368,7 +368,10 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
     strength: string;
     dosageForm: string;
   }) => {
-    return getInventoryStockForMedicine(inventory, med);
+    return getInventoryStockForMedicine(inventory, {
+      ...med,
+      id: med.id || med.medicineId || '',
+    });
   };
 
   const quickSearchSaleMedicines = useMemo(() => {

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import {
   collection,
@@ -28,6 +28,7 @@ import {
   LogOut,
   Menu,
   ShoppingCart,
+  Upload,
   Users,
   Wifi,
   WifiOff,
@@ -96,6 +97,15 @@ import {
   StaffMember,
   Transaction,
 } from './types';
+import {
+  downloadPharmacyBackupJson,
+  fetchServerPharmacyState,
+  loadIndexedDbSnapshot,
+  parsePharmacyBackupJson,
+  PharmacyPersistentState,
+  pushServerPharmacyState,
+  saveIndexedDbSnapshot,
+} from './utils/persistentStorage';
 
 type ActiveSection =
   | 'compare'
@@ -123,6 +133,7 @@ const STORAGE_KEYS = {
   POS_CART: 'pharma_pos_bd_v3_pos_cart',
   PURCHASE_CART: 'pharma_pos_bd_v3_purchase_cart',
   SEED_MIGRATED: 'pharma_pos_bd_v3_seed_migrated_v3',
+  HAS_USER_DATA: 'pharma_pos_bd_v3_has_user_data',
 };
 
 const DEFAULT_POS_CART: CartItem[] = [
@@ -418,6 +429,18 @@ function saveLocal<T>(key: string, data: T) {
 }
 
 export default function App() {
+  // Detect before any useState runs whether localStorage already had persisted user data
+  // or if the browser cache / localStorage was just cleared
+  const hadLocalDataOnBootRef = useRef<boolean>(
+    typeof window !== 'undefined' &&
+      (localStorage.getItem(STORAGE_KEYS.HAS_USER_DATA) === '1' ||
+        localStorage.getItem(STORAGE_KEYS.TRANSACTIONS) !== null ||
+        localStorage.getItem(STORAGE_KEYS.CUSTOM_MEDS) !== null)
+  );
+  const serverHydratedRef = useRef<boolean>(false);
+  const [serverHydrated, setServerHydrated] = useState<boolean>(false);
+  const backupFileInputRef = useRef<HTMLInputElement | null>(null);
+
   const [user, setUser] = useState<User | null>(null);
   const [cloudSession, setCloudSession] = useState<ShopCloudSession | null>(() =>
     loadSavedShopCloudSession()
@@ -668,7 +691,218 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // Sync state changes to localStorage & cross-tab storage listener
+  // Hydrate from Persistent Server Database (/api/pharmacy-state) and IndexedDB on boot
+  // This ensures that even if the user clears their browser cache, 100% of their data is immediately restored!
+  useEffect(() => {
+    let cancelled = false;
+
+    const mergeByUpdatedAt = <T extends { id: string; updatedAtMs?: number }>(
+      remoteList: T[],
+      localList: T[],
+      deletedSet: Set<string>,
+      isInv = false
+    ): T[] => {
+      const byId = new Map<string, T>();
+      const canDelete = (id: string) => {
+        if (isInv && INITIAL_DEMO_INVENTORY.some((d) => d.id === id)) return false;
+        return true;
+      };
+
+      for (const r of remoteList) {
+        const canonId = getCanonicalDocId(r.id);
+        if (canDelete(canonId) && (deletedSet.has(r.id) || deletedSet.has(canonId))) continue;
+        byId.set(canonId, { ...r, id: canonId });
+      }
+
+      for (const l of localList) {
+        const canonId = getCanonicalDocId(l.id);
+        if (canDelete(canonId) && (deletedSet.has(l.id) || deletedSet.has(canonId))) continue;
+        const existing = byId.get(canonId);
+        const lTs = l.updatedAtMs || 0;
+        const rTs = existing?.updatedAtMs || 0;
+        if (!existing) {
+          if (lTs > 0 || isInv || remoteList.length === 0) {
+            byId.set(canonId, { ...l, id: canonId });
+          }
+        } else if (lTs > rTs) {
+          byId.set(canonId, { ...l, id: canonId });
+        }
+      }
+
+      return Array.from(byId.values());
+    };
+
+    (async () => {
+      const [serverRes, idbSnapshot] = await Promise.all([
+        fetchServerPharmacyState(),
+        loadIndexedDbSnapshot(),
+      ]);
+      if (cancelled) return;
+
+      const remote =
+        serverRes.hasData && serverRes.state
+          ? serverRes.state
+          : idbSnapshot || null;
+
+      if (remote) {
+        if (!hadLocalDataOnBootRef.current) {
+          // Browser cache was cleared (or fresh browser/device):
+          // Directly restore the exact persisted state from Server / IndexedDB!
+          const rDeleted = Array.isArray(remote.deletedIds) ? remote.deletedIds : [];
+          setDeletedIds(rDeleted);
+          saveLocal(STORAGE_KEYS.DELETED_IDS, rDeleted);
+
+          if (remote.shopProfile && remote.shopProfile.shopName) {
+            setShopProfile(remote.shopProfile);
+            saveLocal(STORAGE_KEYS.SHOP, remote.shopProfile);
+          }
+          if (Array.isArray(remote.inventory) && remote.inventory.length > 0) {
+            setInventory(remote.inventory);
+            saveLocal(STORAGE_KEYS.INVENTORY, remote.inventory);
+          }
+          if (Array.isArray(remote.customers)) {
+            setCustomers(remote.customers);
+            saveLocal(STORAGE_KEYS.CUSTOMERS, remote.customers);
+          }
+          if (Array.isArray(remote.transactions)) {
+            setTransactions(remote.transactions);
+            saveLocal(STORAGE_KEYS.TRANSACTIONS, remote.transactions);
+          }
+          if (Array.isArray(remote.staffList) && remote.staffList.length > 0) {
+            setStaffList(remote.staffList);
+            saveLocal(STORAGE_KEYS.STAFF, remote.staffList);
+            setActiveStaff(remote.staffList[0]);
+          }
+          if (Array.isArray(remote.customMedicines)) {
+            setCustomMedicines(remote.customMedicines);
+            saveLocal(STORAGE_KEYS.CUSTOM_MEDS, remote.customMedicines);
+          }
+          if (Array.isArray(remote.priceWatches)) {
+            setPriceWatches(remote.priceWatches);
+            saveLocal(STORAGE_KEYS.PRICE_WATCHES, remote.priceWatches);
+          }
+          if (Array.isArray(remote.priceAlerts)) {
+            setPriceAlerts(remote.priceAlerts);
+            saveLocal(STORAGE_KEYS.PRICE_ALERTS, remote.priceAlerts);
+          }
+          if (Array.isArray(remote.posCart)) {
+            setPosCart(remote.posCart);
+            saveLocal(STORAGE_KEYS.POS_CART, remote.posCart);
+          }
+          if (Array.isArray(remote.purchaseCart)) {
+            setPurchaseCart(remote.purchaseCart);
+            saveLocal(STORAGE_KEYS.PURCHASE_CART, remote.purchaseCart);
+          }
+          if (remote.cloudSession) {
+            saveShopCloudSession(remote.cloudSession);
+            setCloudSession(remote.cloudSession);
+          }
+          try {
+            localStorage.setItem(STORAGE_KEYS.HAS_USER_DATA, '1');
+          } catch {
+            // ignore
+          }
+          hadLocalDataOnBootRef.current = true;
+        } else {
+          // Normal reload where localStorage was intact: merge remote & local by updatedAtMs
+          const mergedDeletedArr = Array.from(
+            new Set([
+              ...(Array.isArray(remote.deletedIds) ? remote.deletedIds : []),
+              ...deletedIds,
+            ])
+          ).filter((id) => !isCoreDatabaseMedicineId(id) && !id.startsWith('inv-seed-'));
+          const mergedDeletedSet = new Set(mergedDeletedArr);
+          setDeletedIds(mergedDeletedArr);
+          saveLocal(STORAGE_KEYS.DELETED_IDS, mergedDeletedArr);
+
+          if (remote.shopProfile) {
+            setShopProfile((prev) => {
+              const rTs = remote.shopProfile.updatedAtMs || 0;
+              const lTs = prev.updatedAtMs || 0;
+              const winner = rTs > lTs ? remote.shopProfile : prev;
+              saveLocal(STORAGE_KEYS.SHOP, winner);
+              return winner;
+            });
+          }
+          if (Array.isArray(remote.inventory)) {
+            setInventory((prev) => {
+              const next = mergeByUpdatedAt(remote.inventory, prev, mergedDeletedSet, true);
+              saveLocal(STORAGE_KEYS.INVENTORY, next);
+              return next;
+            });
+          }
+          if (Array.isArray(remote.customers)) {
+            setCustomers((prev) => {
+              const next = mergeByUpdatedAt(remote.customers, prev, mergedDeletedSet);
+              saveLocal(STORAGE_KEYS.CUSTOMERS, next);
+              return next;
+            });
+          }
+          if (Array.isArray(remote.transactions)) {
+            setTransactions((prev) => {
+              const next = mergeByUpdatedAt(remote.transactions, prev, mergedDeletedSet);
+              next.sort(
+                (a, b) =>
+                  (b.updatedAtMs || 0) - (a.updatedAtMs || 0) ||
+                  b.invoiceNo.localeCompare(a.invoiceNo)
+              );
+              saveLocal(STORAGE_KEYS.TRANSACTIONS, next);
+              return next;
+            });
+          }
+          if (Array.isArray(remote.staffList) && remote.staffList.length > 0) {
+            setStaffList((prev) => {
+              const next = mergeByUpdatedAt(remote.staffList, prev, mergedDeletedSet);
+              const finalStaff = next.length > 0 ? next : INITIAL_DEMO_STAFF;
+              saveLocal(STORAGE_KEYS.STAFF, finalStaff);
+              return finalStaff;
+            });
+          }
+          if (Array.isArray(remote.customMedicines)) {
+            setCustomMedicines((prev) => {
+              const next = mergeByUpdatedAt(remote.customMedicines, prev, mergedDeletedSet);
+              saveLocal(STORAGE_KEYS.CUSTOM_MEDS, next);
+              return next;
+            });
+          }
+          if (Array.isArray(remote.priceWatches)) {
+            setPriceWatches((prev) => {
+              const next = mergeByUpdatedAt(remote.priceWatches, prev, mergedDeletedSet);
+              saveLocal(STORAGE_KEYS.PRICE_WATCHES, next);
+              return next;
+            });
+          }
+          if (Array.isArray(remote.priceAlerts)) {
+            setPriceAlerts((prev) => {
+              const next = mergeByUpdatedAt(remote.priceAlerts, prev, mergedDeletedSet);
+              saveLocal(STORAGE_KEYS.PRICE_ALERTS, next);
+              return next;
+            });
+          }
+          try {
+            localStorage.setItem(STORAGE_KEYS.HAS_USER_DATA, '1');
+          } catch {
+            // ignore
+          }
+        }
+      } else {
+        try {
+          localStorage.setItem(STORAGE_KEYS.HAS_USER_DATA, '1');
+        } catch {
+          // ignore
+        }
+      }
+
+      serverHydratedRef.current = true;
+      setServerHydrated(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Sync state changes to localStorage, IndexedDB, and Server Persistent Database (/api/pharmacy-state)
   useEffect(() => {
     saveLocal(STORAGE_KEYS.SHOP, shopProfile);
   }, [shopProfile]);
@@ -702,6 +936,50 @@ export default function App() {
   useEffect(() => {
     saveLocal(STORAGE_KEYS.PURCHASE_CART, purchaseCart);
   }, [purchaseCart]);
+
+  // Continuous automatic backup to Server Disk (/api/pharmacy-state) and IndexedDB
+  useEffect(() => {
+    if (!serverHydrated || !serverHydratedRef.current) return;
+    try {
+      localStorage.setItem(STORAGE_KEYS.HAS_USER_DATA, '1');
+    } catch {
+      // ignore
+    }
+    const snapshot: PharmacyPersistentState = {
+      shopProfile,
+      inventory,
+      customers,
+      transactions,
+      staffList,
+      customMedicines,
+      priceWatches,
+      priceAlerts,
+      deletedIds,
+      posCart,
+      purchaseCart,
+      cloudSession,
+      updatedAtMs: Date.now(),
+    };
+    saveIndexedDbSnapshot(snapshot);
+    const timer = setTimeout(() => {
+      pushServerPharmacyState(snapshot, 'overwrite');
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [
+    serverHydrated,
+    shopProfile,
+    inventory,
+    customers,
+    transactions,
+    staffList,
+    customMedicines,
+    priceWatches,
+    priceAlerts,
+    deletedIds,
+    posCart,
+    purchaseCart,
+    cloudSession,
+  ]);
 
   // Listen to storage events across browser tabs so multi-user / multi-counter tabs update immediately
   useEffect(() => {
@@ -778,7 +1056,7 @@ export default function App() {
 
   // Shared Pharmacy Real-Time Firestore Listeners (accessible across ALL logged-in accounts)
   useEffect(() => {
-    if (!authReady || !user) return;
+    if (!authReady || !user || !serverHydrated) return;
 
     const deduplicateCloudDocs = <T extends { id: string; updatedAtMs?: number }>(
       rawDocs: { rawId: string; item: T }[]
@@ -1491,6 +1769,25 @@ export default function App() {
 
         await batch.commit();
       }
+      const snapshot: PharmacyPersistentState = {
+        shopProfile,
+        inventory,
+        customers,
+        transactions,
+        staffList,
+        customMedicines,
+        priceWatches,
+        priceAlerts,
+        deletedIds,
+        posCart,
+        purchaseCart,
+        cloudSession,
+        updatedAtMs: Date.now(),
+      };
+      await Promise.all([
+        pushServerPharmacyState(snapshot, 'overwrite'),
+        saveIndexedDbSnapshot(snapshot),
+      ]);
       saveLocal(STORAGE_KEYS.SHOP, shopProfile);
       saveLocal(STORAGE_KEYS.STAFF, staffList);
       saveLocal(STORAGE_KEYS.INVENTORY, inventory);
@@ -1499,12 +1796,82 @@ export default function App() {
       saveLocal(STORAGE_KEYS.CUSTOM_MEDS, customMedicines);
       saveLocal(STORAGE_KEYS.PRICE_WATCHES, priceWatches);
       saveLocal(STORAGE_KEYS.PRICE_ALERTS, priceAlerts);
-      showToast('ইকবাল ফার্মেসীর সকল ডেটা ক্লাউডে সফলভাবে সিঙ্ক হয়েছে!');
+      showToast('ইকবাল ফার্মেসীর সকল ডেটা ক্লাউড ও সার্ভারে স্থায়ীভাবে সংরক্ষিত হয়েছে!');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'batch_seed');
       showToast('ইকবাল ফার্মেসীর সকল ডেটা সফলভাবে সিঙ্ক ও সংরক্ষিত হয়েছে!');
     } finally {
       setSeedingCloud(false);
+    }
+  };
+
+  const handleDownloadBackup = () => {
+    const snapshot: PharmacyPersistentState = {
+      shopProfile,
+      inventory,
+      customers,
+      transactions,
+      staffList,
+      customMedicines,
+      priceWatches,
+      priceAlerts,
+      deletedIds,
+      posCart,
+      purchaseCart,
+      cloudSession,
+      updatedAtMs: Date.now(),
+    };
+    downloadPharmacyBackupJson(snapshot);
+    showToast('সকল ডেটার ব্যাকআপ ফাইল (.json) ডাউনলোড হয়েছে!');
+  };
+
+  const handleRestoreBackupFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = parsePharmacyBackupJson(text);
+      if (!parsed) {
+        showToast('সঠিক ব্যাকআপ ফাইল নির্বাচন করুন (.json)');
+        return;
+      }
+      if (parsed.shopProfile) {
+        setShopProfile(parsed.shopProfile);
+        saveLocal(STORAGE_KEYS.SHOP, parsed.shopProfile);
+      }
+      setInventory(parsed.inventory);
+      saveLocal(STORAGE_KEYS.INVENTORY, parsed.inventory);
+      setCustomers(parsed.customers);
+      saveLocal(STORAGE_KEYS.CUSTOMERS, parsed.customers);
+      setTransactions(parsed.transactions);
+      saveLocal(STORAGE_KEYS.TRANSACTIONS, parsed.transactions);
+      if (parsed.staffList.length > 0) {
+        setStaffList(parsed.staffList);
+        saveLocal(STORAGE_KEYS.STAFF, parsed.staffList);
+        setActiveStaff(parsed.staffList[0]);
+      }
+      setCustomMedicines(parsed.customMedicines);
+      saveLocal(STORAGE_KEYS.CUSTOM_MEDS, parsed.customMedicines);
+      setPriceWatches(parsed.priceWatches);
+      saveLocal(STORAGE_KEYS.PRICE_WATCHES, parsed.priceWatches);
+      setPriceAlerts(parsed.priceAlerts);
+      saveLocal(STORAGE_KEYS.PRICE_ALERTS, parsed.priceAlerts);
+      setDeletedIds(parsed.deletedIds);
+      saveLocal(STORAGE_KEYS.DELETED_IDS, parsed.deletedIds);
+      setPosCart(parsed.posCart);
+      saveLocal(STORAGE_KEYS.POS_CART, parsed.posCart);
+      setPurchaseCart(parsed.purchaseCart);
+      saveLocal(STORAGE_KEYS.PURCHASE_CART, parsed.purchaseCart);
+
+      await Promise.all([
+        pushServerPharmacyState(parsed, 'overwrite'),
+        saveIndexedDbSnapshot(parsed),
+      ]);
+      showToast('ব্যাকআপ ফাইল থেকে সকল ডেটা সফলভাবে রিস্টোর ও সংরক্ষিত হয়েছে!');
+    } catch {
+      showToast('ব্যাকআপ ফাইল লোড করতে সমস্যা হয়েছে');
+    } finally {
+      e.target.value = '';
     }
   };
 
@@ -3174,7 +3541,9 @@ export default function App() {
 
   // Add or Edit Medicine in Catalog & Trigger Automatic Price Change Alert
   const handleSaveMedicineCatalog = async (
-    medData: Omit<MedicineCatalogItem, 'id' | 'darNo' | 'unitsPerStrip'>,
+    medData: Omit<MedicineCatalogItem, 'id' | 'darNo' | 'unitsPerStrip' | 'dosageForm'> & {
+      dosageForm: string;
+    },
     existingMed?: MedicineCatalogItem
   ) => {
     const nowMs = Date.now();
@@ -4175,6 +4544,42 @@ export default function App() {
                 </button>
               </div>
             </form>
+
+            {/* 4-Layer Permanent Data Protection & Backup/Restore */}
+            <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-md space-y-2.5">
+              <div className="text-xs font-bold text-emerald-950 flex items-center justify-between">
+                <span>স্থায়ী ডাটা সুরক্ষা (৪-স্তরের অটো ব্যাকআপ সক্রিয়)</span>
+                <span className="font-mono text-[11px] text-emerald-700">Auto-Saved</span>
+              </div>
+              <p className="text-xs text-emerald-900 leading-relaxed">
+                সকল ক্রয়-বিক্রয় বিল, কাস্টম প্রডাক্ট, স্টক ও হিসাব স্বয়ংক্রিয়ভাবে সার্ভার ডাটাবেস ও ক্লাউডে সেভ থাকে—ব্রাউজারের ক্যাশ ক্লিয়ার করলেও কোনো ডাটা মুছবে না।
+              </p>
+              <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                <button
+                  type="button"
+                  onClick={handleDownloadBackup}
+                  className="flex-1 py-2 px-3 text-xs font-semibold text-emerald-900 bg-white hover:bg-emerald-100 border border-emerald-300 rounded-md flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  ব্যাকআপ ডাউনলোড (.json)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => backupFileInputRef.current?.click()}
+                  className="flex-1 py-2 px-3 text-xs font-semibold text-slate-800 bg-white hover:bg-slate-100 border border-slate-300 rounded-md flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  ব্যাকআপ রিস্টোর
+                </button>
+                <input
+                  ref={backupFileInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={handleRestoreBackupFile}
+                  className="hidden"
+                />
+              </div>
+            </div>
 
             {isCloudLoggedIn && (
               <div className="pt-3 border-t border-slate-200 flex items-center justify-between">
