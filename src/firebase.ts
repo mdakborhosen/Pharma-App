@@ -203,7 +203,11 @@ export async function signInShopCloudAccount(params?: {
       const cred = await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword);
       firebaseUid = cred.user.uid;
       resolvedEmail = cred.user.email || cleanEmail;
-    } catch {
+    } catch (err: unknown) {
+      const errCode = (err as { code?: string })?.code;
+      if (errCode === 'auth/wrong-password' || errCode === 'auth/invalid-credential') {
+        throw new Error('ভুল পাসওয়ার্ড! অনুগ্রহ করে সঠিক পাসওয়ার্ড দিন।');
+      }
       try {
         const created = await createUserWithEmailAndPassword(auth, cleanEmail, cleanPassword);
         try {
@@ -213,7 +217,11 @@ export async function signInShopCloudAccount(params?: {
         }
         firebaseUid = created.user.uid;
         resolvedEmail = created.user.email || cleanEmail;
-      } catch {
+      } catch (createErr: unknown) {
+        const createErrCode = (createErr as { code?: string })?.code;
+        if (createErrCode === 'auth/email-already-in-use') {
+          throw new Error('ভুল পাসওয়ার্ড! অনুগ্রহ করে এই একাউন্টের সঠিক পাসওয়ার্ড দিন।');
+        }
         try {
           const anon = await signInAnonymously(auth);
           firebaseUid = anon.user.uid;

@@ -28,9 +28,11 @@ import {
   EyeOff,
   Key,
   Link2,
+  Lock,
   LogIn,
   LogOut,
   Menu,
+  Unlock,
   ShieldCheck,
   ShoppingCart,
   Upload,
@@ -470,6 +472,7 @@ export default function App() {
   const [cloudLoginRole, setCloudLoginRole] = useState<'owner' | 'staff'>('owner');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [cloudLoginLoading, setCloudLoginLoading] = useState(false);
+  const [loginErrorMessage, setLoginErrorMessage] = useState<string | null>(null);
 
   // New Owner Registration State
   const [registerShopName, setRegisterShopName] = useState('ইকবাল ফার্মেসী');
@@ -1740,6 +1743,7 @@ export default function App() {
     overridePass?: string
   ) => {
     if (e) e.preventDefault();
+    setLoginErrorMessage(null);
     setCloudLoginLoading(true);
     try {
       const cleanIdent = (overrideIdent !== undefined ? overrideIdent : cloudLoginEmail).trim();
@@ -1748,7 +1752,16 @@ export default function App() {
       const cleanDigits = cleanIdent.replace(/[^0-9]/g, '');
 
       if (!cleanIdent) {
-        showToast('অনুগ্রহ করে মোবাইল নম্বর বা ইমেইল প্রদান করুন!');
+        const msg = 'অনুগ্রহ করে মোবাইল নম্বর বা ইমেইল প্রদান করুন!';
+        setLoginErrorMessage(msg);
+        showToast(msg);
+        return;
+      }
+
+      if (!cleanPass) {
+        const msg = 'অনুগ্রহ করে পাসওয়ার্ড প্রদান করুন!';
+        setLoginErrorMessage(msg);
+        showToast(msg);
         return;
       }
 
@@ -1759,16 +1772,9 @@ export default function App() {
         // ignore
       }
 
-      // 1. Check Staff members in staffList
-      const matchedStaff = staffList.find((st) => {
-        if (st.roleTitle === 'owner') return false;
-        if (!st.active) return false;
-        if (isEmail && st.email && st.email.trim().toLowerCase() === cleanIdent.toLowerCase()) {
-          return true;
-        }
-        if (st.name && st.name.trim().toLowerCase() === cleanIdent.toLowerCase()) {
-          return true;
-        }
+      // 1. Search for matching account in staffList (Staff or Owner)
+      const matchedAccount = staffList.find((st) => {
+        // Check phone digits (length >= 6)
         const stDigits = (st.phone || '').replace(/[^0-9]/g, '');
         if (
           cleanDigits.length >= 6 &&
@@ -1778,58 +1784,86 @@ export default function App() {
         ) {
           return true;
         }
+        // Check email
+        if (isEmail && st.email && st.email.trim().toLowerCase() === cleanIdent.toLowerCase()) {
+          return true;
+        }
+        // Check name
+        if (st.name && st.name.trim().toLowerCase() === cleanIdent.toLowerCase()) {
+          return true;
+        }
+        // Check role keywords for owner
+        if (
+          st.roleTitle === 'owner' &&
+          (cleanIdent.toLowerCase() === 'owner' || cleanIdent === 'মালিক')
+        ) {
+          return true;
+        }
         return false;
       });
 
-      if (matchedStaff) {
-        const expectedStaffPass = matchedStaff.password || '123456';
-        if (cleanPass && cleanPass !== expectedStaffPass) {
-          showToast(`ভুল পাসওয়ার্ড! স্টাফ ${matchedStaff.name}-এর জন্য সঠিক পাসওয়ার্ড দিন।`);
-          return;
+      if (matchedAccount) {
+        // Strict password check!
+        const expectedPass =
+          matchedAccount.password ||
+          (matchedAccount.roleTitle === 'owner' ? 'IqbalPharmacy#2026' : '123456');
+
+        if (cleanPass !== expectedPass) {
+          const roleLabel =
+            matchedAccount.roleTitle === 'owner' ? 'Owner (মালিক)' : `স্টাফ ${matchedAccount.name}`;
+          const err = `ভুল পাসওয়ার্ড! ${roleLabel}-এর জন্য সঠিক পাসওয়ার্ড দিন।`;
+          setLoginErrorMessage(err);
+          showToast(err);
+          return; // STOP! NEVER LOG IN ON WRONG PASSWORD!
         }
-        // Successfully authenticate staff!
+
+        // Correct password verified!
         const session = await signInShopCloudAccount({
-          email: matchedStaff.email || `${cleanDigits || matchedStaff.id}@iqbalpharmacy.bd`,
-          password: cleanPass || expectedStaffPass,
-          displayName: matchedStaff.name,
+          email: matchedAccount.email || `${cleanDigits || matchedAccount.id}@iqbalpharmacy.bd`,
+          password: cleanPass,
+          displayName:
+            matchedAccount.roleTitle === 'owner'
+              ? (matchedAccount.name === 'Owner' ? 'ইকবাল মাহমুদ (Owner)' : matchedAccount.name)
+              : matchedAccount.name,
           shopName: shopProfile.shopName || 'ইকবাল ফার্মেসী',
-          phone: matchedStaff.phone,
-          operatorRole: 'staff',
-          staffId: matchedStaff.id,
+          phone: matchedAccount.phone,
+          operatorRole: matchedAccount.roleTitle === 'owner' ? 'owner' : 'staff',
+          staffId: matchedAccount.id,
         });
+
         setCloudSession(session);
-        setActiveStaff(matchedStaff);
+        setActiveStaff(matchedAccount);
+        setLoginErrorMessage(null);
         setShowCloudLoginModal(false);
-        showToast(`স্বাগতম ${matchedStaff.name}! স্টাফ হিসেবে সফলভাবে লগইন হয়েছে।`);
+        showToast(
+          matchedAccount.roleTitle === 'owner'
+            ? 'স্বাগতম Owner! দোকানের মালিক হিসেবে লগইন সফল হয়েছে।'
+            : `স্বাগতম ${matchedAccount.name}! স্টাফ হিসেবে সফলভাবে লগইন হয়েছে।`
+        );
         return;
       }
 
-      // 2. Check Owner account
-      const ownerStaff = staffList.find((st) => st.roleTitle === 'owner');
-      const isOwnerEmail =
-        isEmail &&
-        (cleanIdent.toLowerCase() ===
-          (ownerStaff?.email || 'mhakbor2001@gmail.com').toLowerCase() ||
-          cleanIdent.toLowerCase().includes('mhakbor') ||
-          cleanIdent.toLowerCase().includes('owner') ||
-          cleanIdent.toLowerCase().includes('iqbal'));
-      const isOwnerPhone =
-        cleanDigits.length >= 6 &&
-        (cleanDigits ===
-          (ownerStaff?.phone || shopProfile.phone || '01812358839').replace(/[^0-9]/g, '') ||
-          (ownerStaff?.phone || '').replace(/[^0-9]/g, '').endsWith(cleanDigits) ||
-          cleanDigits.endsWith((ownerStaff?.phone || '').replace(/[^0-9]/g, '')));
+      // 2. Check if logging in as default Owner
+      const isDefaultOwner =
+        cleanIdent.toLowerCase() === 'mhakbor2001@gmail.com' ||
+        cleanDigits === '01812358839' ||
+        cleanIdent.toLowerCase() === 'owner' ||
+        cleanIdent === 'মালিক';
 
-      if (isOwnerEmail || isOwnerPhone || cleanIdent.toLowerCase() === 'owner') {
+      if (isDefaultOwner) {
+        const ownerStaff = staffList.find((st) => st.roleTitle === 'owner');
         const expectedOwnerPass = ownerStaff?.password || 'IqbalPharmacy#2026';
-        if (cleanPass && cleanPass !== expectedOwnerPass && cleanPass !== 'IqbalPharmacy#2026') {
-          showToast('ভুল পাসওয়ার্ড! দোকান মালিকের (Owner) সঠিক পাসওয়ার্ড দিন।');
-          return;
+        if (cleanPass !== expectedOwnerPass) {
+          const err = 'ভুল পাসওয়ার্ড! দোকান মালিকের (Owner) সঠিক পাসওয়ার্ড দিন।';
+          setLoginErrorMessage(err);
+          showToast(err);
+          return; // STOP!
         }
+
         const session = await signInShopCloudAccount({
-          email: isEmail ? cleanIdent : (ownerStaff?.email || 'mhakbor2001@gmail.com'),
-          password: cleanPass || expectedOwnerPass,
-          displayName: ownerStaff?.name || 'ইকবাল মাহমুদ (Owner)',
+          email: 'mhakbor2001@gmail.com',
+          password: cleanPass,
+          displayName: 'ইকবাল মাহমুদ (Owner)',
           shopName: shopProfile.shopName || 'ইকবাল ফার্মেসী',
           phone: ownerStaff?.phone || shopProfile.phone || '01812-358839',
           operatorRole: 'owner',
@@ -1837,25 +1871,20 @@ export default function App() {
         });
         setCloudSession(session);
         if (ownerStaff) setActiveStaff(ownerStaff);
+        setLoginErrorMessage(null);
         setShowCloudLoginModal(false);
         showToast('স্বাগতম Owner! দোকানের মালিক হিসেবে লগইন সফল হয়েছে।');
         return;
       }
 
-      // 3. Fallback generic shop cloud account sign-in
-      const session = await signInShopCloudAccount({
-        email: cleanIdent,
-        password: cleanPass || 'IqbalPharmacy#2026',
-        displayName: 'দোকান অপারেটর',
-        shopName: shopProfile.shopName || 'ইকবাল ফার্মেসী',
-        phone: cleanDigits || shopProfile.phone || '01812-358839',
-        operatorRole: cloudLoginRole,
-      });
-      setCloudSession(session);
-      setShowCloudLoginModal(false);
-      showToast(`দোকান ক্লাউড লগইন সফল হয়েছে! (${session.displayName})`);
+      // 3. User account not found!
+      const notFoundErr = 'একাউন্ট পাওয়া যায়নি! সঠিক মোবাইল নম্বর অথবা ইমেইল দিয়ে চেষ্টা করুন।';
+      setLoginErrorMessage(notFoundErr);
+      showToast(notFoundErr);
+      return;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      setLoginErrorMessage(msg || 'লগইন ব্যর্থ হয়েছে');
       showToast(`লগইন ব্যর্থ: ${msg || 'দয়া করে সঠিক তথ্য দিন'}`);
     } finally {
       setCloudLoginLoading(false);
@@ -4555,117 +4584,376 @@ export default function App() {
             </div>
           )}
 
-          {/* Active View Render */}
-          {activeSection === 'compare' && (
-            <MedicineCompareView
-              catalog={fullCatalog}
-              inventory={inventory}
-              priceWatches={priceWatches}
-              priceAlerts={priceAlerts}
-              publicAppUrl={PUBLIC_APP_URL}
-              onAddToPosCart={handleAddToPosCart}
-              onQuickAddInventory={handleQuickAddInventoryFromCompare}
-              onSaveMedicineCatalog={handleSaveMedicineCatalog}
-              onDeleteCustomMedicine={handleDeleteCustomMedicine}
-              onTogglePriceWatch={handleTogglePriceWatch}
-              onMarkAlertRead={handleMarkAlertRead}
-              onDeletePriceAlert={handleDeletePriceAlert}
-            />
-          )}
+          {/* If Locked Out / Not Logged In: Show Full Pharmacy Lock Screen */}
+          {!isCloudLoggedIn ? (
+            <div className="max-w-xl mx-auto py-6 sm:py-10">
+              <div className="bg-white border border-slate-200 rounded-2xl shadow-xl p-6 sm:p-8 space-y-6">
+                {/* Lockout Header */}
+                <div className="text-center space-y-2.5">
+                  <div className="w-16 h-16 mx-auto rounded-full bg-amber-50 border-2 border-amber-200 flex items-center justify-center text-amber-600 shadow-sm">
+                    <Lock className="w-8 h-8" />
+                  </div>
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-200">
+                    <span>🔒 ফার্মেসী সিস্টেম লকআউট অবস্থায় রয়েছে</span>
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-bold text-slate-900">
+                    {shopProfile.shopName || 'ইকবাল ফার্মেসী'}
+                  </h2>
+                  <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
+                    দোকানের সেলস, ইনভেন্টরি, কাস্টমার লেজার ও হিসাব সুরক্ষার জন্য সিস্টেমটি লকআউট করা আছে। কাজ শুরু করতে মালিক (Owner) অথবা স্টাফের আইডি ও পাসওয়ার্ড দিয়ে আনলক করুন।
+                  </p>
+                </div>
 
-          {activeSection === 'pos_accounts' && (
-            <PosAndDailyAccountsView
-              catalog={fullCatalog}
-              inventory={inventory}
-              customers={customers}
-              transactions={transactions}
-              staffList={staffList}
-              activeStaff={activeStaff}
-              onSelectActiveStaff={(st) => {
-                setActiveStaff(st);
-                showToast(`সক্রিয় অপারেটর: ${getOperatorName(st)}`);
-              }}
-              posCart={posCart}
-              onAddToCart={handleAddToPosCart}
-              onAddCustomToCart={handleAddCustomToPosCart}
-              onUpdateCartQty={handleUpdateCartQty}
-              onUpdateCartUnitPrice={handleUpdateCartUnitPrice}
-              onUpdateCartPurchasePrice={handleUpdateCartPurchasePrice}
-              onUpdateCartItemDetails={handleUpdateCartItemDetails}
-              onRemoveFromCart={handleRemoveFromCart}
-              onClearCart={() => {
-                setPosCart([]);
-                saveLocal(STORAGE_KEYS.POS_CART, []);
-              }}
-              onCompleteSale={handleCompleteSale}
-              purchaseCart={purchaseCart}
-              onAddToPurchaseCart={handleAddToPurchaseCart}
-              onAddCustomToPurchaseCart={handleAddCustomToPurchaseCart}
-              onUpdatePurchaseCartQty={handleUpdatePurchaseCartQty}
-              onUpdatePurchaseCartCost={handleUpdatePurchaseCartCost}
-              onUpdatePurchaseCartMrp={handleUpdatePurchaseCartMrp}
-              onUpdatePurchaseCartBatch={handleUpdatePurchaseCartBatch}
-              onUpdatePurchaseCartItemDetails={handleUpdatePurchaseCartItemDetails}
-              onRemoveFromPurchaseCart={handleRemoveFromPurchaseCart}
-              onClearPurchaseCart={() => {
-                setPurchaseCart([]);
-                saveLocal(STORAGE_KEYS.PURCHASE_CART, []);
-              }}
-              onCompletePurchaseInvoice={handleCompletePurchaseInvoice}
-              onRecordPurchase={handleRecordPurchase}
-              editingInvoiceTx={editingInvoiceTx}
-              onStartEditInvoice={handleStartEditInvoice}
-              onCancelEditInvoice={handleCancelEditInvoice}
-              onEditTransaction={handleEditTransaction}
-              onDeleteTransaction={handleDeleteTransaction}
-              shopProfile={shopProfile}
-            />
-          )}
+                {/* Tabs: Login vs Register Owner */}
+                <div className="flex border-b border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCloudAuthTab('login');
+                      setLoginErrorMessage(null);
+                    }}
+                    className={`flex-1 py-2.5 text-xs font-bold text-center border-b-2 cursor-pointer transition-colors ${
+                      cloudAuthTab === 'login'
+                        ? 'border-teal-700 text-teal-800'
+                        : 'border-transparent text-slate-500 hover:text-slate-900'
+                    }`}
+                  >
+                    Owner ও স্টাফ আনলক / লগইন
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCloudAuthTab('register_owner');
+                      setLoginErrorMessage(null);
+                    }}
+                    className={`flex-1 py-2.5 text-xs font-bold text-center border-b-2 cursor-pointer transition-colors ${
+                      cloudAuthTab === 'register_owner'
+                        ? 'border-teal-700 text-teal-800'
+                        : 'border-transparent text-slate-500 hover:text-slate-900'
+                    }`}
+                  >
+                    নতুন Owner আইডি খুলুন
+                  </button>
+                </div>
 
-          {activeSection === 'inventory' && (
-            <InventoryView
-              inventory={inventory}
-              catalog={fullCatalog}
-              onSaveInventoryItem={handleSaveInventoryItem}
-              onDeleteInventoryItem={handleDeleteInventoryItem}
-              onQuickRestock={handleQuickRestock}
-            />
-          )}
+                {loginErrorMessage && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-md text-xs text-red-700 font-semibold flex items-center gap-2">
+                    <span>⚠️ {loginErrorMessage}</span>
+                  </div>
+                )}
 
-          {activeSection === 'customer_ledger' && (
-            <CustomerLedgerView
-              customers={customers}
-              transactions={transactions}
-              activeStaff={activeStaff}
-              onSaveCustomer={handleSaveCustomer}
-              onDeleteCustomer={handleDeleteCustomer}
-              onCollectDuePayment={handleCollectDuePayment}
-              onStartEditInvoice={handleStartEditInvoice}
-              onDeleteTransaction={handleDeleteTransaction}
-            />
-          )}
+                {/* TAB 1: Universal Login Form */}
+                {cloudAuthTab === 'login' && (
+                  <form onSubmit={handleUniversalLoginSubmit} className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">
+                        মোবাইল নম্বর অথবা ইমেইল / জিমেইল *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={cloudLoginEmail}
+                        onChange={(e) => {
+                          setCloudLoginEmail(e.target.value);
+                          setLoginErrorMessage(null);
+                        }}
+                        placeholder="01812-358839 অথবা example@gmail.com"
+                        className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md font-mono"
+                      />
+                    </div>
 
-          {activeSection === 'staff_shop' && (
-            <StaffAndShopView
-              shopProfile={shopProfile}
-              staffList={staffList}
-              activeStaff={activeStaff}
-              transactions={transactions}
-              cloudSession={cloudSession}
-              isCloudLoggedIn={isCloudLoggedIn}
-              seedingCloud={seedingCloud}
-              onOpenCloudLoginModal={() => setShowCloudLoginModal(true)}
-              onQuickCloudLogin={handleQuickCloudLogin}
-              onCloudLogout={handleCloudLogout}
-              onSyncCloudData={handleSeedCloudData}
-              onSelectActiveStaff={(st) => {
-                setActiveStaff(st);
-                showToast(`সক্রিয় অপারেটর: ${getOperatorName(st)}`);
-              }}
-              onUpdateShopProfile={handleUpdateShopProfile}
-              onSaveStaffMember={handleSaveStaffMember}
-              onDeleteStaffMember={handleDeleteStaffMember}
-            />
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-medium text-slate-700">
+                          লগইন পাসওয়ার্ড *
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setShowLoginPassword(!showLoginPassword)}
+                          className="text-[11px] text-teal-700 hover:text-teal-900 cursor-pointer inline-flex items-center gap-1"
+                        >
+                          {showLoginPassword ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                          {showLoginPassword ? 'লুকান' : 'দেখুন'}
+                        </button>
+                      </div>
+                      <input
+                        type={showLoginPassword ? 'text' : 'password'}
+                        required
+                        value={cloudLoginPassword}
+                        onChange={(e) => {
+                          setCloudLoginPassword(e.target.value);
+                          setLoginErrorMessage(null);
+                        }}
+                        placeholder="••••••••"
+                        className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md font-mono"
+                      />
+                    </div>
+
+                    {/* Quick Selection Buttons */}
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-md space-y-2">
+                      <div className="text-[11px] font-semibold text-slate-700 flex items-center justify-between">
+                        <span>১-ক্লিকে টেস্ট আইডি সিলেক্ট করুন:</span>
+                        <span className="text-[10px] text-slate-400">Quick Fill</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const ownerStaff = staffList.find((s) => s.roleTitle === 'owner');
+                            setCloudLoginEmail(ownerStaff?.phone || '01812-358839');
+                            setCloudLoginPassword(ownerStaff?.password || 'IqbalPharmacy#2026');
+                            setCloudLoginRole('owner');
+                            setLoginErrorMessage(null);
+                          }}
+                          className="px-2.5 py-1 text-xs bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded font-medium cursor-pointer"
+                        >
+                          👑 Owner (01812-358839)
+                        </button>
+                        {staffList
+                          .filter((s) => s.roleTitle !== 'owner')
+                          .map((st) => (
+                            <button
+                              key={st.id}
+                              type="button"
+                              onClick={() => {
+                                setCloudLoginEmail(st.email || st.phone);
+                                setCloudLoginPassword(st.password || '123456');
+                                setCloudLoginRole('staff');
+                                setLoginErrorMessage(null);
+                              }}
+                              className="px-2.5 py-1 text-xs bg-white hover:bg-teal-50 text-slate-800 border border-slate-200 rounded font-medium cursor-pointer"
+                            >
+                              👤 {st.name} ({st.phone})
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={cloudLoginLoading}
+                      className="w-full py-2.5 px-4 text-xs font-bold text-white bg-teal-700 hover:bg-teal-800 rounded-md cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5 shadow-sm"
+                    >
+                      <Unlock className="w-4 h-4" />
+                      {cloudLoginLoading ? 'আনলক হচ্ছে...' : 'সিস্টেম আনলক ও লগইন করুন'}
+                    </button>
+                  </form>
+                )}
+
+                {/* TAB 2: Register New Owner */}
+                {cloudAuthTab === 'register_owner' && (
+                  <form onSubmit={handleRegisterOwnerSubmit} className="space-y-3.5">
+                    <div className="p-3 bg-teal-50 border border-teal-200 rounded-md text-xs text-teal-900 leading-relaxed">
+                      <strong>নতুন Owner আইডি রেজিস্ট্রেশন:</strong> নিজের ফার্মেসীর নাম, মোবাইল নম্বর ও পাসওয়ার্ড দিয়ে একাউন্ট তৈরি করুন।
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">
+                        ফার্মেসী / দোকানের নাম *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={registerShopName}
+                        onChange={(e) => setRegisterShopName(e.target.value)}
+                        placeholder="যেমন: ইকবাল ফার্মেসী"
+                        className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-700 mb-1">
+                          মালিকের নাম *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={registerOwnerName}
+                          onChange={(e) => setRegisterOwnerName(e.target.value)}
+                          placeholder="মালিকের নাম"
+                          className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-700 mb-1">
+                          মোবাইল নম্বর *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={registerPhone}
+                          onChange={(e) => setRegisterPhone(e.target.value)}
+                          placeholder="018XXXXXXXX"
+                          className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">
+                        ইমেইল / জিমেইল (ঐচ্ছিক)
+                      </label>
+                      <input
+                        type="email"
+                        value={registerEmail}
+                        onChange={(e) => setRegisterEmail(e.target.value)}
+                        placeholder="owner@gmail.com"
+                        className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-medium text-slate-700">
+                          পাসওয়ার্ড সেট করুন *
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setShowRegisterPassword(!showRegisterPassword)}
+                          className="text-[11px] text-teal-700 hover:text-teal-900 cursor-pointer inline-flex items-center gap-1"
+                        >
+                          {showRegisterPassword ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                          {showRegisterPassword ? 'লুকান' : 'দেখুন'}
+                        </button>
+                      </div>
+                      <input
+                        type={showRegisterPassword ? 'text' : 'password'}
+                        required
+                        value={registerPassword}
+                        onChange={(e) => setRegisterPassword(e.target.value)}
+                        placeholder="নূন্যতম ৬ অক্ষর"
+                        className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={cloudLoginLoading}
+                      className="w-full py-2.5 px-4 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-md cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+                    >
+                      <ShieldCheck className="w-4 h-4" />
+                      {cloudLoginLoading ? 'একাউন্ট তৈরি হচ্ছে...' : 'নতুন Owner একাউন্ট তৈরি ও আনলক করুন'}
+                    </button>
+                  </form>
+                )}
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Active View Render */}
+              {activeSection === 'compare' && (
+                <MedicineCompareView
+                  catalog={fullCatalog}
+                  inventory={inventory}
+                  priceWatches={priceWatches}
+                  priceAlerts={priceAlerts}
+                  publicAppUrl={PUBLIC_APP_URL}
+                  onAddToPosCart={handleAddToPosCart}
+                  onQuickAddInventory={handleQuickAddInventoryFromCompare}
+                  onSaveMedicineCatalog={handleSaveMedicineCatalog}
+                  onDeleteCustomMedicine={handleDeleteCustomMedicine}
+                  onTogglePriceWatch={handleTogglePriceWatch}
+                  onMarkAlertRead={handleMarkAlertRead}
+                  onDeletePriceAlert={handleDeletePriceAlert}
+                />
+              )}
+
+              {activeSection === 'pos_accounts' && (
+                <PosAndDailyAccountsView
+                  catalog={fullCatalog}
+                  inventory={inventory}
+                  customers={customers}
+                  transactions={transactions}
+                  staffList={staffList}
+                  activeStaff={activeStaff}
+                  onSelectActiveStaff={(st) => {
+                    setActiveStaff(st);
+                    showToast(`সক্রিয় অপারেটর: ${getOperatorName(st)}`);
+                  }}
+                  posCart={posCart}
+                  onAddToCart={handleAddToPosCart}
+                  onAddCustomToCart={handleAddCustomToPosCart}
+                  onUpdateCartQty={handleUpdateCartQty}
+                  onUpdateCartUnitPrice={handleUpdateCartUnitPrice}
+                  onUpdateCartPurchasePrice={handleUpdateCartPurchasePrice}
+                  onUpdateCartItemDetails={handleUpdateCartItemDetails}
+                  onRemoveFromCart={handleRemoveFromCart}
+                  onClearCart={() => {
+                    setPosCart([]);
+                    saveLocal(STORAGE_KEYS.POS_CART, []);
+                  }}
+                  onCompleteSale={handleCompleteSale}
+                  purchaseCart={purchaseCart}
+                  onAddToPurchaseCart={handleAddToPurchaseCart}
+                  onAddCustomToPurchaseCart={handleAddCustomToPurchaseCart}
+                  onUpdatePurchaseCartQty={handleUpdatePurchaseCartQty}
+                  onUpdatePurchaseCartCost={handleUpdatePurchaseCartCost}
+                  onUpdatePurchaseCartMrp={handleUpdatePurchaseCartMrp}
+                  onUpdatePurchaseCartBatch={handleUpdatePurchaseCartBatch}
+                  onUpdatePurchaseCartItemDetails={handleUpdatePurchaseCartItemDetails}
+                  onRemoveFromPurchaseCart={handleRemoveFromPurchaseCart}
+                  onClearPurchaseCart={() => {
+                    setPurchaseCart([]);
+                    saveLocal(STORAGE_KEYS.PURCHASE_CART, []);
+                  }}
+                  onCompletePurchaseInvoice={handleCompletePurchaseInvoice}
+                  onRecordPurchase={handleRecordPurchase}
+                  editingInvoiceTx={editingInvoiceTx}
+                  onStartEditInvoice={handleStartEditInvoice}
+                  onCancelEditInvoice={handleCancelEditInvoice}
+                  onEditTransaction={handleEditTransaction}
+                  onDeleteTransaction={handleDeleteTransaction}
+                  shopProfile={shopProfile}
+                />
+              )}
+
+              {activeSection === 'inventory' && (
+                <InventoryView
+                  inventory={inventory}
+                  catalog={fullCatalog}
+                  onSaveInventoryItem={handleSaveInventoryItem}
+                  onDeleteInventoryItem={handleDeleteInventoryItem}
+                  onQuickRestock={handleQuickRestock}
+                />
+              )}
+
+              {activeSection === 'customer_ledger' && (
+                <CustomerLedgerView
+                  customers={customers}
+                  transactions={transactions}
+                  activeStaff={activeStaff}
+                  onSaveCustomer={handleSaveCustomer}
+                  onDeleteCustomer={handleDeleteCustomer}
+                  onCollectDuePayment={handleCollectDuePayment}
+                  onStartEditInvoice={handleStartEditInvoice}
+                  onDeleteTransaction={handleDeleteTransaction}
+                />
+              )}
+
+              {activeSection === 'staff_shop' && (
+                <StaffAndShopView
+                  shopProfile={shopProfile}
+                  staffList={staffList}
+                  activeStaff={activeStaff}
+                  transactions={transactions}
+                  cloudSession={cloudSession}
+                  isCloudLoggedIn={isCloudLoggedIn}
+                  seedingCloud={seedingCloud}
+                  onOpenCloudLoginModal={() => setShowCloudLoginModal(true)}
+                  onQuickCloudLogin={handleQuickCloudLogin}
+                  onCloudLogout={handleCloudLogout}
+                  onSyncCloudData={handleSeedCloudData}
+                  onSelectActiveStaff={(st) => {
+                    setActiveStaff(st);
+                    showToast(`সক্রিয় অপারেটর: ${getOperatorName(st)}`);
+                  }}
+                  onUpdateShopProfile={handleUpdateShopProfile}
+                  onSaveStaffMember={handleSaveStaffMember}
+                  onDeleteStaffMember={handleDeleteStaffMember}
+                />
+              )}
+            </>
           )}
         </main>
       </div>
@@ -4758,6 +5046,11 @@ export default function App() {
             {/* TAB 1: Universal Login (Owner or Staff by Email/Mobile + Password) */}
             {cloudAuthTab === 'login' && (
               <form onSubmit={handleUniversalLoginSubmit} className="space-y-3.5">
+                {loginErrorMessage && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-md text-xs text-red-700 font-semibold flex items-center gap-2">
+                    <span>⚠️ {loginErrorMessage}</span>
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
                     মোবাইল নম্বর অথবা ইমেইল / জিমেইল *
