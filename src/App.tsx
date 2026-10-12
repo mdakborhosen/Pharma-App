@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { onAuthStateChanged, User } from 'firebase/auth';
+import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import {
   collection,
   deleteDoc,
@@ -77,6 +77,7 @@ import {
 import {
   auth,
   db,
+  EXPLICIT_LOGOUT_KEY,
   handleFirestoreError,
   loadSavedShopCloudSession,
   LOGGED_OUT_FLAG_KEY,
@@ -483,8 +484,13 @@ export default function App() {
   const [seedingCloud, setSeedingCloud] = useState(false);
   const [showIOSInstallModal, setShowIOSInstallModal] = useState(false);
 
-  const isCloudLoggedIn = Boolean(user || cloudSession);
-  const activeCloudUid = user?.uid || cloudSession?.uid || null;
+  const isLoggedOutExplicitly =
+    typeof window !== 'undefined' &&
+    (localStorage.getItem(LOGGED_OUT_FLAG_KEY) === '1' ||
+      sessionStorage.getItem(EXPLICIT_LOGOUT_KEY) === '1');
+
+  const isCloudLoggedIn = Boolean(cloudSession && !isLoggedOutExplicitly);
+  const activeCloudUid = isCloudLoggedIn ? (cloudSession?.uid || user?.uid || null) : null;
 
   const isOnline = useOnlineStatus();
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
@@ -1039,32 +1045,60 @@ export default function App() {
 
   // Auth listener + ShopCloudSession synchronization
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (currUser) => {
+    const unsub = onAuthStateChanged(auth, async (currUser) => {
+      const isExplicitlyLoggedOut =
+        typeof window !== 'undefined' &&
+        (localStorage.getItem(LOGGED_OUT_FLAG_KEY) === '1' ||
+          sessionStorage.getItem(EXPLICIT_LOGOUT_KEY) === '1');
+
+      if (isExplicitlyLoggedOut) {
+        setUser(null);
+        setCloudSession(null);
+        setAuthReady(true);
+        if (currUser) {
+          try {
+            await signOut(auth);
+          } catch {
+            // ignore
+          }
+        }
+        return;
+      }
+
       setUser(currUser);
       if (currUser) {
         const saved = loadSavedShopCloudSession();
-        if (!saved || saved.uid !== currUser.uid) {
+        if (saved) {
+          setCloudSession(saved);
+        } else {
           const synced: ShopCloudSession = {
             uid: currUser.uid,
-            email: currUser.email || saved?.email || 'mhakbor2001@gmail.com',
-            displayName: currUser.displayName || saved?.displayName || 'ইকবাল মাহমুদ (Owner)',
-            shopName: saved?.shopName || 'ইকবাল ফার্মেসী',
-            phone: saved?.phone || '01712525994',
-            operatorRole: saved?.operatorRole || 'owner',
-            loggedInAt: saved?.loggedInAt || Date.now(),
+            email: currUser.email || 'mhakbor2001@gmail.com',
+            displayName: currUser.displayName || 'ইকবাল মাহমুদ (Owner)',
+            shopName: shopProfile.shopName || 'ইকবাল ফার্মেসী',
+            phone: shopProfile.phone || '01812-358839',
+            operatorRole: 'owner',
+            loggedInAt: Date.now(),
           };
           saveShopCloudSession(synced);
           setCloudSession(synced);
         }
+      } else {
+        const saved = loadSavedShopCloudSession();
+        setCloudSession(saved);
       }
       setAuthReady(true);
     });
     return () => unsub();
-  }, []);
+  }, [shopProfile.shopName, shopProfile.phone]);
 
   // If user has an active saved ShopCloudSession on load, ensure Firebase Auth is connected in background
   useEffect(() => {
-    if (!authReady || user || !cloudSession) return;
+    const isExplicitlyLoggedOut =
+      typeof window !== 'undefined' &&
+      (localStorage.getItem(LOGGED_OUT_FLAG_KEY) === '1' ||
+        sessionStorage.getItem(EXPLICIT_LOGOUT_KEY) === '1');
+    if (!authReady || user || !cloudSession || isExplicitlyLoggedOut) return;
     signInShopCloudAccount({
       email: cloudSession.email,
       displayName: cloudSession.displayName,
@@ -1718,11 +1752,21 @@ export default function App() {
         return;
       }
 
+      try {
+        localStorage.removeItem(LOGGED_OUT_FLAG_KEY);
+        sessionStorage.removeItem(EXPLICIT_LOGOUT_KEY);
+      } catch {
+        // ignore
+      }
+
       // 1. Check Staff members in staffList
       const matchedStaff = staffList.find((st) => {
         if (st.roleTitle === 'owner') return false;
         if (!st.active) return false;
         if (isEmail && st.email && st.email.trim().toLowerCase() === cleanIdent.toLowerCase()) {
+          return true;
+        }
+        if (st.name && st.name.trim().toLowerCase() === cleanIdent.toLowerCase()) {
           return true;
         }
         const stDigits = (st.phone || '').replace(/[^0-9]/g, '');
@@ -1826,6 +1870,12 @@ export default function App() {
     }
     setCloudLoginLoading(true);
     try {
+      try {
+        localStorage.removeItem(LOGGED_OUT_FLAG_KEY);
+        sessionStorage.removeItem(EXPLICIT_LOGOUT_KEY);
+      } catch {
+        // ignore
+      }
       const cleanEmail =
         registerEmail.trim() ||
         `${registerPhone.replace(/[^0-9]/g, '') || 'owner'}@iqbalpharmacy.bd`;
@@ -1874,6 +1924,12 @@ export default function App() {
   const handleGoogleCloudLogin = async () => {
     setCloudLoginLoading(true);
     try {
+      try {
+        localStorage.removeItem(LOGGED_OUT_FLAG_KEY);
+        sessionStorage.removeItem(EXPLICIT_LOGOUT_KEY);
+      } catch {
+        // ignore
+      }
       const session = await signInWithGoogle(
         cloudLoginEmail.trim() || 'mhakbor2001@gmail.com'
       );
@@ -1888,9 +1944,19 @@ export default function App() {
   };
 
   const handleCloudLogout = async () => {
-    await logOutUser();
+    try {
+      localStorage.setItem(LOGGED_OUT_FLAG_KEY, '1');
+      sessionStorage.setItem(EXPLICIT_LOGOUT_KEY, '1');
+    } catch {
+      // ignore
+    }
     setCloudSession(null);
     setUser(null);
+    await logOutUser();
+    const ownerStaff = staffList.find((s) => s.roleTitle === 'owner');
+    if (ownerStaff) {
+      setActiveStaff(ownerStaff);
+    }
     // Push null session to server persistent state & IDB so it never resurrects
     if (serverHydrated) {
       const snapshot: PharmacyPersistentState = {

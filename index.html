@@ -1,6 +1,75 @@
 <!doctype html>
 <html lang="bn">
   <head>
+    <script>
+      (function() {
+        if (typeof window === 'undefined') return;
+        if (window.WebSocket) {
+          var OriginalWebSocket = window.WebSocket;
+          window.WebSocket = function(url, protocols) {
+            var isViteHmr =
+              protocols === 'vite-hmr' ||
+              (Array.isArray(protocols) && protocols.indexOf('vite-hmr') !== -1) ||
+              (typeof url === 'string' && (url.indexOf('/@vite') !== -1 || url.indexOf('vite-hmr') !== -1));
+            if (isViteHmr) {
+              var listeners = {};
+              return {
+                readyState: 1,
+                CONNECTING: 0,
+                OPEN: 1,
+                CLOSING: 2,
+                CLOSED: 3,
+                send: function() {},
+                close: function() {},
+                addEventListener: function(event, cb) {
+                  listeners[event] = listeners[event] || [];
+                  listeners[event].push(cb);
+                },
+                removeEventListener: function(event, cb) {
+                  if (!listeners[event]) return;
+                  listeners[event] = listeners[event].filter(function(fn) { return fn !== cb; });
+                },
+                dispatchEvent: function() { return true; },
+                set onopen(cb) { if (typeof cb === 'function') setTimeout(cb, 0); },
+                set onclose(cb) {},
+                set onerror(cb) {},
+                set onmessage(cb) {}
+              };
+            }
+            return new OriginalWebSocket(url, protocols);
+          };
+          window.WebSocket.prototype = OriginalWebSocket.prototype;
+          window.WebSocket.CONNECTING = 0;
+          window.WebSocket.OPEN = 1;
+          window.WebSocket.CLOSING = 2;
+          window.WebSocket.CLOSED = 3;
+        }
+
+        var isWsError = function(e) {
+          if (!e) return false;
+          var msg = (typeof e === 'string' ? e : e.message || '') + '';
+          var file = (e.filename || '') + '';
+          return (
+            msg.indexOf('WebSocket') !== -1 ||
+            msg.indexOf('websocket') !== -1 ||
+            file.indexOf('@vite/client') !== -1
+          );
+        };
+        window.addEventListener('error', function(event) {
+          if (isWsError(event) || isWsError(event.error)) {
+            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+            if (event.preventDefault) event.preventDefault();
+            return true;
+          }
+        }, true);
+        window.addEventListener('unhandledrejection', function(event) {
+          if (isWsError(event.reason)) {
+            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+            if (event.preventDefault) event.preventDefault();
+          }
+        }, true);
+      })();
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ইকবাল ফার্মেসী — ওষুধের মূল্য তুলনা ও ফার্মেসি ম্যানেজমেন্ট</title>
