@@ -185,20 +185,26 @@ export async function signInShopCloudAccount(params?: {
   const cleanEmail = rawInput.includes('@')
     ? rawInput.toLowerCase()
     : `${rawInput.replace(/[^a-zA-Z0-9]/g, '') || 'iqbalpharmacy'}@iqbalpharmacy.bd`;
-  const cleanPassword =
-    params?.password && params.password.trim().length >= 4
-      ? params.password.trim()
-      : 'IqbalPharmacy#2026';
+  const cleanPassword = params?.password ? params.password.trim() : '';
   const displayName = (params?.displayName || 'ইকবাল মাহমুদ (Owner)').trim();
   const shopName = (params?.shopName || 'ইকবাল ফার্মেসী').trim();
   const phone = (params?.phone || '01812-358839').trim();
   const operatorRole = (params?.operatorRole || 'owner').trim();
   const staffId = params?.staffId;
 
-  let firebaseUid = auth.currentUser?.uid || '';
-  let resolvedEmail = auth.currentUser?.email || cleanEmail;
+  let firebaseUid = '';
+  let resolvedEmail = cleanEmail;
 
-  if (!firebaseUid) {
+  if (cleanPassword) {
+    // If an existing session is in auth with different user, sign out first
+    if (auth.currentUser && auth.currentUser.email !== cleanEmail) {
+      try {
+        await signOut(auth);
+      } catch {
+        // ignore
+      }
+    }
+
     try {
       const cred = await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword);
       firebaseUid = cred.user.uid;
@@ -208,29 +214,41 @@ export async function signInShopCloudAccount(params?: {
       if (errCode === 'auth/wrong-password' || errCode === 'auth/invalid-credential') {
         throw new Error('ভুল পাসওয়ার্ড! অনুগ্রহ করে সঠিক পাসওয়ার্ড দিন।');
       }
-      try {
-        const created = await createUserWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+
+      // If user doesn't exist yet in Firebase Auth, attempt to create it with this password
+      if (
+        (errCode === 'auth/user-not-found' || errCode === 'auth/invalid-credential') &&
+        cleanPassword.length >= 6
+      ) {
         try {
-          await updateProfile(created.user, { displayName });
-        } catch {
-          // ignore profile update error
+          const created = await createUserWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+          try {
+            await updateProfile(created.user, { displayName });
+          } catch {
+            // ignore
+          }
+          firebaseUid = created.user.uid;
+          resolvedEmail = created.user.email || cleanEmail;
+        } catch (createErr: unknown) {
+          const createErrCode = (createErr as { code?: string })?.code;
+          if (createErrCode === 'auth/email-already-in-use') {
+            throw new Error('ভুল পাসওয়ার্ড! অনুগ্রহ করে এই একাউন্টের সঠিক পাসওয়ার্ড দিন।');
+          }
+          // Do NOT sign in anonymously if password failed!
+          throw new Error('ভুল পাসওয়ার্ড! অনুগ্রহ করে সঠিক পাসওয়ার্ড দিন।');
         }
-        firebaseUid = created.user.uid;
-        resolvedEmail = created.user.email || cleanEmail;
-      } catch (createErr: unknown) {
-        const createErrCode = (createErr as { code?: string })?.code;
-        if (createErrCode === 'auth/email-already-in-use') {
-          throw new Error('ভুল পাসওয়ার্ড! অনুগ্রহ করে এই একাউন্টের সঠিক পাসওয়ার্ড দিন।');
-        }
-        try {
-          const anon = await signInAnonymously(auth);
-          firebaseUid = anon.user.uid;
-        } catch {
-          // Fallback deterministic shop cloud UID when domain/network blocks Firebase Auth endpoints
-          firebaseUid = `shop_iqbal_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 32)}`;
-        }
+      } else if (errCode === 'auth/network-request-failed') {
+        // Network offline fallback deterministic shop cloud UID
+        firebaseUid = `shop_iqbal_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 32)}`;
+      } else {
+        throw new Error('ভুল পাসওয়ার্ড! অনুগ্রহ করে সঠিক পাসওয়ার্ড দিন।');
       }
     }
+  } else if (auth.currentUser) {
+    firebaseUid = auth.currentUser.uid;
+    resolvedEmail = auth.currentUser.email || cleanEmail;
+  } else {
+    firebaseUid = `shop_iqbal_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 32)}`;
   }
 
   const session: ShopCloudSession = {
@@ -261,6 +279,19 @@ export async function registerNewShopOwnerAccount(params: {
   const shopName = params.shopName.trim() || 'ইকবাল ফার্মেসী';
   const phone = params.phone.trim();
 
+  if (cleanPassword.length < 6) {
+    throw new Error('পাসওয়ার্ড নূন্যতম ৬ অক্ষরের হতে হবে!');
+  }
+
+  // Sign out existing session first
+  if (auth.currentUser) {
+    try {
+      await signOut(auth);
+    } catch {
+      // ignore
+    }
+  }
+
   let firebaseUid = '';
   try {
     const cred = await createUserWithEmailAndPassword(auth, cleanEmail, cleanPassword);
@@ -273,19 +304,25 @@ export async function registerNewShopOwnerAccount(params: {
   } catch (err: unknown) {
     const errorCode = (err as { code?: string })?.code;
     if (errorCode === 'auth/email-already-in-use') {
+      // User exists: verify password
       try {
         const cred = await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword);
         firebaseUid = cred.user.uid;
-      } catch {
-        firebaseUid = `shop_owner_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 32)}`;
+      } catch (signErr: unknown) {
+        const signErrCode = (signErr as { code?: string })?.code;
+        if (signErrCode === 'auth/wrong-password' || signErrCode === 'auth/invalid-credential') {
+          throw new Error('এই মোবাইল বা ইমেইলে ইতোমধ্যে একাউন্ট রয়েছে এবং আপনার প্রদত্ত পাসওয়ার্ডটি ভুল!');
+        }
+        throw new Error('এই মোবাইল বা ইমেইলে ইতোমধ্যে একাউন্ট খোলা আছে। সঠিক পাসওয়ার্ড দিয়ে লগইন করুন।');
       }
+    } else if (errorCode === 'auth/weak-password') {
+      throw new Error('পাসওয়ার্ড নূন্যতম ৬ অক্ষরের হতে হবে!');
+    } else if (errorCode === 'auth/invalid-email') {
+      throw new Error('অকার্যকর ইমেইল ফরম্যাট! সঠিক ইমেইল বা মোবাইল প্রদান করুন।');
+    } else if (errorCode === 'auth/network-request-failed') {
+      firebaseUid = `shop_owner_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 32)}`;
     } else {
-      try {
-        const anon = await signInAnonymously(auth);
-        firebaseUid = anon.user.uid;
-      } catch {
-        firebaseUid = `shop_owner_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 32)}`;
-      }
+      throw new Error('রেজিস্ট্রেশন ব্যর্থ হয়েছে। সঠিক তথ্য দিয়ে পুনরায় চেষ্টা করুন।');
     }
   }
 

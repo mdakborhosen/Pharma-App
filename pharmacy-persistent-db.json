@@ -1,5 +1,5 @@
 {
-  "updatedAtMs": 1791824198478,
+  "updatedAtMs": 1791825358500,
   "state": {
     "shopProfile": {
       "id": "shop-default",
@@ -1071,8 +1071,8 @@
       "shopName": "ইকবাল ফার্মেসী",
       "phone": "01812-358839",
       "operatorRole": "owner",
-      "loggedInAt": 1791824197140
+      "loggedInAt": 1791825357351
     },
-    "updatedAtMs": 1791824198478
+    "updatedAtMs": 1791825358500
   }
 }
