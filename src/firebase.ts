@@ -47,12 +47,14 @@ export interface ShopCloudSession {
   displayName: string;
   shopName: string;
   phone: string;
-  operatorRole: string;
+  operatorRole: string; // 'owner' | 'staff'
+  staffId?: string;
   loggedInAt: number;
 }
 
 export const SHOP_CLOUD_SESSION_KEY = 'iqbal_pharmacy_cloud_session_v1';
 export const EXPLICIT_LOGOUT_KEY = 'iqbal_pharmacy_explicit_logout_v1';
+export const LOGGED_OUT_FLAG_KEY = 'iqbal_pharmacy_is_logged_out_v1';
 
 export const DEFAULT_SHOP_CLOUD_SESSION: ShopCloudSession = {
   uid: 'shop_iqbal_mhakbor2001_gmail_com',
@@ -61,24 +63,27 @@ export const DEFAULT_SHOP_CLOUD_SESSION: ShopCloudSession = {
   shopName: 'ইকবাল ফার্মেসী',
   phone: '01812-358839',
   operatorRole: 'owner',
+  staffId: 'staff-owner-1',
   loggedInAt: Date.now(),
 };
 
 export function loadSavedShopCloudSession(): ShopCloudSession | null {
   try {
-    if (sessionStorage.getItem(EXPLICIT_LOGOUT_KEY) === '1') {
+    // If the user explicitly logged out, never restore any session
+    if (
+      localStorage.getItem(LOGGED_OUT_FLAG_KEY) === '1' ||
+      sessionStorage.getItem(EXPLICIT_LOGOUT_KEY) === '1'
+    ) {
       return null;
     }
     const raw = localStorage.getItem(SHOP_CLOUD_SESSION_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as ShopCloudSession;
-      if (parsed && parsed.uid && parsed.email) return parsed;
+      if (parsed && parsed.uid && (parsed.email || parsed.phone)) return parsed;
     }
-    // Automatically restore default shop cloud session even after browser cache clear
-    localStorage.setItem(SHOP_CLOUD_SESSION_KEY, JSON.stringify(DEFAULT_SHOP_CLOUD_SESSION));
-    return DEFAULT_SHOP_CLOUD_SESSION;
+    return null;
   } catch {
-    return DEFAULT_SHOP_CLOUD_SESSION;
+    return null;
   }
 }
 
@@ -86,7 +91,10 @@ export function saveShopCloudSession(session: ShopCloudSession | null): void {
   try {
     if (!session) {
       localStorage.removeItem(SHOP_CLOUD_SESSION_KEY);
+      localStorage.setItem(LOGGED_OUT_FLAG_KEY, '1');
+      sessionStorage.setItem(EXPLICIT_LOGOUT_KEY, '1');
     } else {
+      localStorage.removeItem(LOGGED_OUT_FLAG_KEY);
       sessionStorage.removeItem(EXPLICIT_LOGOUT_KEY);
       localStorage.setItem(SHOP_CLOUD_SESSION_KEY, JSON.stringify(session));
     }
@@ -171,19 +179,21 @@ export async function signInShopCloudAccount(params?: {
   shopName?: string;
   phone?: string;
   operatorRole?: string;
+  staffId?: string;
 }): Promise<ShopCloudSession> {
   const rawInput = (params?.email || 'mhakbor2001@gmail.com').trim();
   const cleanEmail = rawInput.includes('@')
     ? rawInput.toLowerCase()
     : `${rawInput.replace(/[^a-zA-Z0-9]/g, '') || 'iqbalpharmacy'}@iqbalpharmacy.bd`;
   const cleanPassword =
-    params?.password && params.password.trim().length >= 6
+    params?.password && params.password.trim().length >= 4
       ? params.password.trim()
       : 'IqbalPharmacy#2026';
   const displayName = (params?.displayName || 'ইকবাল মাহমুদ (Owner)').trim();
   const shopName = (params?.shopName || 'ইকবাল ফার্মেসী').trim();
-  const phone = (params?.phone || '01712525994').trim();
+  const phone = (params?.phone || '01812-358839').trim();
   const operatorRole = (params?.operatorRole || 'owner').trim();
+  const staffId = params?.staffId;
 
   let firebaseUid = auth.currentUser?.uid || '';
   let resolvedEmail = auth.currentUser?.email || cleanEmail;
@@ -222,6 +232,63 @@ export async function signInShopCloudAccount(params?: {
     shopName,
     phone,
     operatorRole,
+    staffId,
+    loggedInAt: Date.now(),
+  };
+
+  saveShopCloudSession(session);
+  return session;
+}
+
+export async function registerNewShopOwnerAccount(params: {
+  shopName: string;
+  ownerName: string;
+  email: string;
+  phone: string;
+  password: string;
+}): Promise<ShopCloudSession> {
+  const cleanEmail = params.email.trim().toLowerCase();
+  const cleanPassword = params.password.trim();
+  const displayName = params.ownerName.trim() || 'দোকান মালিক (Owner)';
+  const shopName = params.shopName.trim() || 'ইকবাল ফার্মেসী';
+  const phone = params.phone.trim();
+
+  let firebaseUid = '';
+  try {
+    const cred = await createUserWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+    firebaseUid = cred.user.uid;
+    try {
+      await updateProfile(cred.user, { displayName });
+    } catch {
+      // ignore
+    }
+  } catch (err: unknown) {
+    const errorCode = (err as { code?: string })?.code;
+    if (errorCode === 'auth/email-already-in-use') {
+      try {
+        const cred = await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+        firebaseUid = cred.user.uid;
+      } catch {
+        firebaseUid = `shop_owner_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 32)}`;
+      }
+    } else {
+      try {
+        const anon = await signInAnonymously(auth);
+        firebaseUid = anon.user.uid;
+      } catch {
+        firebaseUid = `shop_owner_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 32)}`;
+      }
+    }
+  }
+
+  const session: ShopCloudSession = {
+    uid: firebaseUid || 'shared_iqbal_pharmacy',
+    email: cleanEmail,
+    displayName: `${displayName} (Owner)`,
+    shopName,
+    phone,
+    operatorRole: 'owner',
+    staffId: 'staff-owner-1',
     loggedInAt: Date.now(),
   };
 
@@ -237,7 +304,7 @@ export async function signInWithGoogle(fallbackEmail = 'mhakbor2001@gmail.com'):
       email: res.user.email || fallbackEmail,
       displayName: res.user.displayName || 'ইকবাল মাহমুদ (Owner)',
       shopName: 'ইকবাল ফার্মেসী',
-      phone: '01712525994',
+      phone: '01812-358839',
       operatorRole: 'owner',
       loggedInAt: Date.now(),
     };
@@ -250,19 +317,20 @@ export async function signInWithGoogle(fallbackEmail = 'mhakbor2001@gmail.com'):
       email: fallbackEmail,
       displayName: 'ইকবাল মাহমুদ (Owner)',
       shopName: 'ইকবাল ফার্মেসী',
-      phone: '01712525994',
+      phone: '01812-358839',
       operatorRole: 'owner',
     });
   }
 }
 
 export async function logOutUser() {
+  saveShopCloudSession(null);
   try {
+    localStorage.setItem(LOGGED_OUT_FLAG_KEY, '1');
     sessionStorage.setItem(EXPLICIT_LOGOUT_KEY, '1');
   } catch {
     // ignore
   }
-  saveShopCloudSession(null);
   try {
     await signOut(auth);
   } catch {

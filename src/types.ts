@@ -114,6 +114,8 @@ export interface StaffMember {
   name: string; // For owner, displays "Owner", for staff displays their specific name
   roleTitle: 'owner' | 'manager' | 'pharmacist' | 'salesman';
   phone: string;
+  email?: string; // Email / Gmail for staff login
+  password?: string; // Password for staff login
   shift: string;
   counterName: string;
   active: boolean;

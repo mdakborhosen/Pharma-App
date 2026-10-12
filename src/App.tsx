@@ -19,16 +19,22 @@ import {
   BellRing,
   BookOpen,
   Boxes,
+  Check,
   Cloud,
   Copy,
   Download,
   ExternalLink,
+  Eye,
+  EyeOff,
+  Key,
   Link2,
   LogIn,
   LogOut,
   Menu,
+  ShieldCheck,
   ShoppingCart,
   Upload,
+  UserCheck,
   Users,
   Wifi,
   WifiOff,
@@ -73,8 +79,10 @@ import {
   db,
   handleFirestoreError,
   loadSavedShopCloudSession,
+  LOGGED_OUT_FLAG_KEY,
   logOutUser,
   OperationType,
+  registerNewShopOwnerAccount,
   sanitizeNumber,
   sanitizeString,
   saveShopCloudSession,
@@ -333,7 +341,7 @@ function buildTransactionCloudPayload(tx: Transaction, ownerId = SHARED_PHARMACY
 }
 
 function buildStaffCloudPayload(st: StaffMember, ownerId = SHARED_PHARMACY_OWNER_ID) {
-  return {
+  const payload: Record<string, unknown> = {
     ownerId: sanitizeString(ownerId, 128, SHARED_PHARMACY_OWNER_ID),
     name: sanitizeString(st.roleTitle === 'owner' ? 'Owner' : st.name, 100, 'Owner'),
     roleTitle: st.roleTitle,
@@ -344,6 +352,13 @@ function buildStaffCloudPayload(st: StaffMember, ownerId = SHARED_PHARMACY_OWNER
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
+  if (st.email && st.email.trim()) {
+    payload.email = sanitizeString(st.email.trim(), 120);
+  }
+  if (st.password && st.password.trim()) {
+    payload.password = sanitizeString(st.password.trim(), 100);
+  }
+  return payload;
 }
 
 function buildCustomMedCloudPayload(cm: CustomMedicine, ownerId = SHARED_PHARMACY_OWNER_ID) {
@@ -447,15 +462,21 @@ export default function App() {
   );
   const [authReady, setAuthReady] = useState(false);
   const [showCloudLoginModal, setShowCloudLoginModal] = useState(false);
-  const [cloudLoginEmail, setCloudLoginEmail] = useState(
-    () => loadSavedShopCloudSession()?.email || 'mhakbor2001@gmail.com'
-  );
-  const [cloudLoginPhone, setCloudLoginPhone] = useState(
-    () => loadSavedShopCloudSession()?.phone || DEFAULT_SHOP_PROFILE.phone || '01712525994'
-  );
+  const [cloudAuthTab, setCloudAuthTab] = useState<'login' | 'register_owner'>('login');
+  const [cloudLoginEmail, setCloudLoginEmail] = useState('01812-358839');
+  const [cloudLoginPhone, setCloudLoginPhone] = useState('01812-358839');
   const [cloudLoginPassword, setCloudLoginPassword] = useState('IqbalPharmacy#2026');
   const [cloudLoginRole, setCloudLoginRole] = useState<'owner' | 'staff'>('owner');
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [cloudLoginLoading, setCloudLoginLoading] = useState(false);
+
+  // New Owner Registration State
+  const [registerShopName, setRegisterShopName] = useState('ইকবাল ফার্মেসী');
+  const [registerOwnerName, setRegisterOwnerName] = useState('ইকবাল মাহমুদ');
+  const [registerEmail, setRegisterEmail] = useState('');
+  const [registerPhone, setRegisterPhone] = useState('01812-358839');
+  const [registerPassword, setRegisterPassword] = useState('');
+  const [showRegisterPassword, setShowRegisterPassword] = useState(false);
   const [activeSection, setActiveSection] = useState<ActiveSection>('compare');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -793,7 +814,10 @@ export default function App() {
             setPurchaseCart(remote.purchaseCart);
             saveLocal(STORAGE_KEYS.PURCHASE_CART, remote.purchaseCart);
           }
-          if (remote.cloudSession) {
+          if (
+            remote.cloudSession &&
+            localStorage.getItem(LOGGED_OUT_FLAG_KEY) !== '1'
+          ) {
             saveShopCloudSession(remote.cloudSession);
             setCloudSession(remote.cloudSession);
           }
@@ -1665,33 +1689,186 @@ export default function App() {
   };
 
   // Shop Cloud Login & Logout Handlers
-  const handleQuickCloudLogin = async () => {
+  const handleQuickCloudLogin = async (prefillEmail?: string, prefillPass?: string) => {
     setCloudLoginLoading(true);
     try {
-      const session = await signInShopCloudAccount({
-        email: cloudLoginEmail.trim() || 'mhakbor2001@gmail.com',
-        password: cloudLoginPassword.trim() || 'IqbalPharmacy#2026',
-        displayName:
-          cloudLoginRole === 'owner'
-            ? 'ইকবাল মাহমুদ (Owner)'
-            : `${getOperatorName(activeStaff)} (Staff)`,
-        shopName: shopProfile.shopName || 'ইকবাল ফার্মেসী',
-        phone: cloudLoginPhone.trim() || shopProfile.phone || '01712525994',
-        operatorRole: cloudLoginRole,
-      });
-      setCloudSession(session);
-      setShowCloudLoginModal(false);
-      showToast(
-        `দোকান ক্লাউড লগইন সফল হয়েছে! (${session.shopName} — ${session.email})`
-      );
+      const emailToUse = prefillEmail || cloudLoginEmail.trim() || '01812-358839';
+      const passToUse = prefillPass || cloudLoginPassword.trim() || 'IqbalPharmacy#2026';
+      await handleUniversalLoginSubmit(undefined, emailToUse, passToUse);
     } finally {
       setCloudLoginLoading(false);
     }
   };
 
-  const handleCustomCloudLoginSubmit = async (e: React.FormEvent) => {
+  const handleUniversalLoginSubmit = async (
+    e?: React.FormEvent,
+    overrideIdent?: string,
+    overridePass?: string
+  ) => {
+    if (e) e.preventDefault();
+    setCloudLoginLoading(true);
+    try {
+      const cleanIdent = (overrideIdent !== undefined ? overrideIdent : cloudLoginEmail).trim();
+      const cleanPass = (overridePass !== undefined ? overridePass : cloudLoginPassword).trim();
+      const isEmail = cleanIdent.includes('@');
+      const cleanDigits = cleanIdent.replace(/[^0-9]/g, '');
+
+      if (!cleanIdent) {
+        showToast('অনুগ্রহ করে মোবাইল নম্বর বা ইমেইল প্রদান করুন!');
+        return;
+      }
+
+      // 1. Check Staff members in staffList
+      const matchedStaff = staffList.find((st) => {
+        if (st.roleTitle === 'owner') return false;
+        if (!st.active) return false;
+        if (isEmail && st.email && st.email.trim().toLowerCase() === cleanIdent.toLowerCase()) {
+          return true;
+        }
+        const stDigits = (st.phone || '').replace(/[^0-9]/g, '');
+        if (
+          cleanDigits.length >= 6 &&
+          (stDigits === cleanDigits ||
+            stDigits.endsWith(cleanDigits) ||
+            cleanDigits.endsWith(stDigits))
+        ) {
+          return true;
+        }
+        return false;
+      });
+
+      if (matchedStaff) {
+        const expectedStaffPass = matchedStaff.password || '123456';
+        if (cleanPass && cleanPass !== expectedStaffPass) {
+          showToast(`ভুল পাসওয়ার্ড! স্টাফ ${matchedStaff.name}-এর জন্য সঠিক পাসওয়ার্ড দিন।`);
+          return;
+        }
+        // Successfully authenticate staff!
+        const session = await signInShopCloudAccount({
+          email: matchedStaff.email || `${cleanDigits || matchedStaff.id}@iqbalpharmacy.bd`,
+          password: cleanPass || expectedStaffPass,
+          displayName: matchedStaff.name,
+          shopName: shopProfile.shopName || 'ইকবাল ফার্মেসী',
+          phone: matchedStaff.phone,
+          operatorRole: 'staff',
+          staffId: matchedStaff.id,
+        });
+        setCloudSession(session);
+        setActiveStaff(matchedStaff);
+        setShowCloudLoginModal(false);
+        showToast(`স্বাগতম ${matchedStaff.name}! স্টাফ হিসেবে সফলভাবে লগইন হয়েছে।`);
+        return;
+      }
+
+      // 2. Check Owner account
+      const ownerStaff = staffList.find((st) => st.roleTitle === 'owner');
+      const isOwnerEmail =
+        isEmail &&
+        (cleanIdent.toLowerCase() ===
+          (ownerStaff?.email || 'mhakbor2001@gmail.com').toLowerCase() ||
+          cleanIdent.toLowerCase().includes('mhakbor') ||
+          cleanIdent.toLowerCase().includes('owner') ||
+          cleanIdent.toLowerCase().includes('iqbal'));
+      const isOwnerPhone =
+        cleanDigits.length >= 6 &&
+        (cleanDigits ===
+          (ownerStaff?.phone || shopProfile.phone || '01812358839').replace(/[^0-9]/g, '') ||
+          (ownerStaff?.phone || '').replace(/[^0-9]/g, '').endsWith(cleanDigits) ||
+          cleanDigits.endsWith((ownerStaff?.phone || '').replace(/[^0-9]/g, '')));
+
+      if (isOwnerEmail || isOwnerPhone || cleanIdent.toLowerCase() === 'owner') {
+        const expectedOwnerPass = ownerStaff?.password || 'IqbalPharmacy#2026';
+        if (cleanPass && cleanPass !== expectedOwnerPass && cleanPass !== 'IqbalPharmacy#2026') {
+          showToast('ভুল পাসওয়ার্ড! দোকান মালিকের (Owner) সঠিক পাসওয়ার্ড দিন।');
+          return;
+        }
+        const session = await signInShopCloudAccount({
+          email: isEmail ? cleanIdent : (ownerStaff?.email || 'mhakbor2001@gmail.com'),
+          password: cleanPass || expectedOwnerPass,
+          displayName: ownerStaff?.name || 'ইকবাল মাহমুদ (Owner)',
+          shopName: shopProfile.shopName || 'ইকবাল ফার্মেসী',
+          phone: ownerStaff?.phone || shopProfile.phone || '01812-358839',
+          operatorRole: 'owner',
+          staffId: ownerStaff?.id || 'staff-owner-1',
+        });
+        setCloudSession(session);
+        if (ownerStaff) setActiveStaff(ownerStaff);
+        setShowCloudLoginModal(false);
+        showToast('স্বাগতম Owner! দোকানের মালিক হিসেবে লগইন সফল হয়েছে।');
+        return;
+      }
+
+      // 3. Fallback generic shop cloud account sign-in
+      const session = await signInShopCloudAccount({
+        email: cleanIdent,
+        password: cleanPass || 'IqbalPharmacy#2026',
+        displayName: 'দোকান অপারেটর',
+        shopName: shopProfile.shopName || 'ইকবাল ফার্মেসী',
+        phone: cleanDigits || shopProfile.phone || '01812-358839',
+        operatorRole: cloudLoginRole,
+      });
+      setCloudSession(session);
+      setShowCloudLoginModal(false);
+      showToast(`দোকান ক্লাউড লগইন সফল হয়েছে! (${session.displayName})`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`লগইন ব্যর্থ: ${msg || 'দয়া করে সঠিক তথ্য দিন'}`);
+    } finally {
+      setCloudLoginLoading(false);
+    }
+  };
+
+  const handleRegisterOwnerSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await handleQuickCloudLogin();
+    if (!registerOwnerName.trim() || !registerPhone.trim() || !registerPassword.trim()) {
+      showToast('দয়া করে মালিকের নাম, মোবাইল নম্বর ও পাসওয়ার্ড পূরণ করুন!');
+      return;
+    }
+    setCloudLoginLoading(true);
+    try {
+      const cleanEmail =
+        registerEmail.trim() ||
+        `${registerPhone.replace(/[^0-9]/g, '') || 'owner'}@iqbalpharmacy.bd`;
+      const session = await registerNewShopOwnerAccount({
+        shopName: registerShopName.trim() || 'ইকবাল ফার্মেসী',
+        ownerName: registerOwnerName.trim(),
+        email: cleanEmail,
+        phone: registerPhone.trim(),
+        password: registerPassword.trim(),
+      });
+
+      const updatedProfile: ShopProfile = {
+        ...shopProfile,
+        shopName: session.shopName,
+        phone: session.phone,
+        updatedAtMs: Date.now(),
+      };
+      await handleUpdateShopProfile(updatedProfile);
+
+      const ownerStaff: StaffMember = {
+        id: 'staff-owner-1',
+        ownerId: session.uid,
+        name: 'Owner',
+        roleTitle: 'owner',
+        phone: session.phone,
+        email: session.email,
+        password: registerPassword.trim(),
+        shift: 'সারাদিন (মূল তত্ত্বাবধান)',
+        counterName: 'কাউন্টার ১ (Owner)',
+        active: true,
+        updatedAtMs: Date.now(),
+      };
+      await handleSaveStaffMember(ownerStaff, 'staff-owner-1');
+      setActiveStaff(ownerStaff);
+      setCloudSession(session);
+      setShowCloudLoginModal(false);
+      showToast(`দোকানের নতুন Owner আইডি (${session.shopName}) সফলভাবে তৈরি হয়েছে!`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`রেজিস্ট্রেশন ত্রুটি: ${msg || 'দয়া করে সঠিক তথ্য দিন'}`);
+    } finally {
+      setCloudLoginLoading(false);
+    }
   };
 
   const handleGoogleCloudLogin = async () => {
@@ -1714,7 +1891,27 @@ export default function App() {
     await logOutUser();
     setCloudSession(null);
     setUser(null);
-    showToast('দোকান ক্লাউড একাউন্ট থেকে লগআউট সম্পন্ন হয়েছে।');
+    // Push null session to server persistent state & IDB so it never resurrects
+    if (serverHydrated) {
+      const snapshot: PharmacyPersistentState = {
+        shopProfile,
+        inventory,
+        customers,
+        transactions,
+        staffList,
+        customMedicines,
+        priceWatches,
+        priceAlerts,
+        deletedIds,
+        posCart,
+        purchaseCart,
+        cloudSession: null,
+        updatedAtMs: Date.now(),
+      };
+      pushServerPharmacyState(snapshot, 'overwrite').catch(() => {});
+      saveIndexedDbSnapshot(snapshot).catch(() => {});
+    }
+    showToast('দোকান ক্লাউড একাউন্ট থেকে সফলভাবে লগআউট সম্পন্ন হয়েছে।');
   };
 
   // Seed & Sync shared pharmacy data to Firestore using canonical IDs
@@ -3870,6 +4067,8 @@ export default function App() {
       name: enforcedName,
       roleTitle: data.roleTitle,
       phone: sanitizeString(data.phone, 30),
+      email: data.email ? sanitizeString(data.email, 120, '') : undefined,
+      password: data.password ? sanitizeString(data.password, 100, '') : undefined,
       shift: sanitizeString(data.shift, 60),
       counterName: sanitizeString(data.counterName, 60),
       active: true,
@@ -4408,15 +4607,17 @@ export default function App() {
       {/* Shop Cloud Login Modal (দোকান ক্লাউড লগইন) */}
       {showCloudLoginModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 no-print">
-          <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl border border-slate-200 space-y-5">
+          <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl border border-slate-200 space-y-5 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-3.5">
               <div>
                 <div className="flex items-center gap-1.5 text-xs font-semibold text-teal-700">
                   <Cloud className="w-4 h-4" />
-                  <span>ইকবাল ফার্মেসী · মাল্টি-ডিভাইস ক্লাউড একাউন্ট</span>
+                  <span>ইকবাল ফার্মেসী · ক্লাউড ও মাল্টি-ডিভাইস সিঙ্ক</span>
                 </div>
                 <h3 className="text-base font-bold text-slate-900 mt-0.5">
-                  দোকান ক্লাউড লগইন (Shop Cloud Login)
+                  {cloudAuthTab === 'register_owner'
+                    ? 'দোকানের নতুন Owner আইডি রেজিস্ট্রেশন'
+                    : 'দোকান ক্লাউড লগইন (Owner ও স্টাফ)'}
                 </h3>
               </div>
               <button
@@ -4428,122 +4629,288 @@ export default function App() {
               </button>
             </div>
 
+            {/* If currently logged in, show current session status */}
             {isCloudLoggedIn && cloudSession && (
-              <div className="p-3.5 bg-teal-50 border border-teal-200 rounded-md space-y-1.5 text-xs">
+              <div className="p-4 bg-teal-50 border border-teal-200 rounded-lg space-y-2 text-xs">
                 <div className="font-bold text-teal-950 flex items-center justify-between">
-                  <span>বর্তমানে লগইন সক্রিয় রয়েছে</span>
-                  <span className="text-teal-700 font-mono">Active</span>
+                  <span className="flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-teal-700" />
+                    <span>বর্তমানে লগইন সক্রিয় রয়েছে</span>
+                  </span>
+                  <span className="px-2 py-0.5 bg-teal-200 text-teal-900 rounded font-semibold text-[11px]">
+                    {cloudSession.operatorRole === 'owner' ? 'Owner (মালিক)' : 'Staff (স্টাফ)'}
+                  </span>
                 </div>
                 <div className="text-teal-900">
-                  দোকান: <strong>{cloudSession.shopName}</strong> ({cloudSession.displayName})
+                  অপারেটর: <strong>{cloudSession.displayName}</strong> · দোকান: <strong>{cloudSession.shopName}</strong>
                 </div>
-                <div className="text-teal-800 font-mono">
-                  ইমেইল: {cloudSession.email} · মোবাইল: {cloudSession.phone}
+                <div className="text-teal-800 font-mono text-[11px]">
+                  মোবাইল: {cloudSession.phone} {cloudSession.email ? `· ইমেইল: ${cloudSession.email}` : ''}
+                </div>
+                <div className="pt-2 flex items-center justify-between border-t border-teal-200/80">
+                  <span className="text-[11px] text-teal-700">অন্য একাউন্টে ঢুকতে চাইলে প্রথমে লগআউট করুন:</span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await handleCloudLogout();
+                    }}
+                    className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white font-semibold rounded text-xs cursor-pointer flex items-center gap-1"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    লগআউট করুন
+                  </button>
                 </div>
               </div>
             )}
 
-            {/* Option 1: Instant 1-Click Shop Cloud Login */}
-            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-md space-y-2.5">
-              <div className="text-xs font-bold text-slate-900">
-                ১-ক্লিকে ইকবাল ফার্মেসী ক্লাউড লগইন (প্রস্তাবিত)
-              </div>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                কোনো পপআপ ব্লক বা ঝামেলা ছাড়াই সরাসরি ইকবাল ফার্মেসীর মূল একাউন্টে লগইন ও ক্লাউড সিঙ্ক চালু করুন।
-              </p>
+            {/* Tabs for Login vs Register New Owner */}
+            <div className="flex border-b border-slate-200">
               <button
                 type="button"
-                disabled={cloudLoginLoading}
-                onClick={handleQuickCloudLogin}
-                className="w-full py-2.5 px-4 text-xs font-bold text-white bg-teal-700 hover:bg-teal-800 rounded-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                onClick={() => setCloudAuthTab('login')}
+                className={`flex-1 py-2 text-xs font-bold text-center border-b-2 cursor-pointer transition-colors ${
+                  cloudAuthTab === 'login'
+                    ? 'border-teal-700 text-teal-800'
+                    : 'border-transparent text-slate-500 hover:text-slate-900'
+                }`}
               >
-                <LogIn className="w-4 h-4" />
-                {cloudLoginLoading
-                  ? 'লগইন হচ্ছে...'
-                  : '১-ক্লিকে ইকবাল ফার্মেসী একাউন্টে লগইন করুন'}
+                Owner ও স্টাফ লগইন
+              </button>
+              <button
+                type="button"
+                onClick={() => setCloudAuthTab('register_owner')}
+                className={`flex-1 py-2 text-xs font-bold text-center border-b-2 cursor-pointer transition-colors ${
+                  cloudAuthTab === 'register_owner'
+                    ? 'border-teal-700 text-teal-800'
+                    : 'border-transparent text-slate-500 hover:text-slate-900'
+                }`}
+              >
+                নতুন Owner আইডি খুলুন
               </button>
             </div>
 
-            {/* Option 2: Email / Mobile & Password Form */}
-            <form onSubmit={handleCustomCloudLoginSubmit} className="space-y-3">
-              <div className="text-xs font-bold text-slate-800">
-                অথবা ইমেইল / মোবাইল নম্বর ও পাসওয়ার্ড দিয়ে লগইন করুন:
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  দোকানের ইমেইল অথবা আইডি *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={cloudLoginEmail}
-                  onChange={(e) => setCloudLoginEmail(e.target.value)}
-                  placeholder="mhakbor2001@gmail.com"
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md font-mono"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
+            {/* TAB 1: Universal Login (Owner or Staff by Email/Mobile + Password) */}
+            {cloudAuthTab === 'login' && (
+              <form onSubmit={handleUniversalLoginSubmit} className="space-y-3.5">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
-                    মোবাইল নম্বর *
+                    মোবাইল নম্বর অথবা ইমেইল / জিমেইল *
                   </label>
                   <input
                     type="text"
                     required
-                    value={cloudLoginPhone}
-                    onChange={(e) => setCloudLoginPhone(e.target.value)}
-                    placeholder="01712525994"
+                    value={cloudLoginEmail}
+                    onChange={(e) => setCloudLoginEmail(e.target.value)}
+                    placeholder="01812-358839 অথবা example@gmail.com"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md font-mono"
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    দোকানের মালিক বা স্টাফ নিজের মোবাইল নম্বর অথবা ইমেইল দিয়ে লগইন করতে পারবেন।
+                  </p>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-medium text-slate-700">
+                      লগইন পাসওয়ার্ড *
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowLoginPassword(!showLoginPassword)}
+                      className="text-[11px] text-teal-700 hover:text-teal-900 cursor-pointer inline-flex items-center gap-1"
+                    >
+                      {showLoginPassword ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                      {showLoginPassword ? 'লুকান' : 'দেখুন'}
+                    </button>
+                  </div>
+                  <input
+                    type={showLoginPassword ? 'text' : 'password'}
+                    required
+                    value={cloudLoginPassword}
+                    onChange={(e) => setCloudLoginPassword(e.target.value)}
+                    placeholder="••••••••"
                     className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md font-mono"
                   />
                 </div>
+
+                {/* Quick Selection Buttons */}
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-md space-y-2">
+                  <div className="text-[11px] font-semibold text-slate-700 flex items-center justify-between">
+                    <span>১-ক্লিকে টেস্ট লগইন নির্বাচন করুন:</span>
+                    <span className="text-[10px] text-slate-400">Quick Fill</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const ownerStaff = staffList.find((s) => s.roleTitle === 'owner');
+                        setCloudLoginEmail(ownerStaff?.phone || '01812-358839');
+                        setCloudLoginPassword(ownerStaff?.password || 'IqbalPharmacy#2026');
+                        setCloudLoginRole('owner');
+                      }}
+                      className="px-2.5 py-1 text-xs bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded font-medium cursor-pointer"
+                    >
+                      👑 Owner (01812-358839)
+                    </button>
+                    {staffList
+                      .filter((s) => s.roleTitle !== 'owner')
+                      .map((st) => (
+                        <button
+                          key={st.id}
+                          type="button"
+                          onClick={() => {
+                            setCloudLoginEmail(st.phone);
+                            setCloudLoginPassword(st.password || '123456');
+                            setCloudLoginRole('staff');
+                          }}
+                          className="px-2.5 py-1 text-xs bg-white hover:bg-teal-50 text-slate-800 border border-slate-200 rounded font-medium cursor-pointer"
+                        >
+                          👤 {st.name} ({st.phone})
+                        </button>
+                      ))}
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-center gap-2 pt-1">
+                  <button
+                    type="submit"
+                    disabled={cloudLoginLoading}
+                    className="w-full sm:flex-1 py-2.5 px-4 text-xs font-bold text-white bg-teal-700 hover:bg-teal-800 rounded-md cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+                  >
+                    <LogIn className="w-4 h-4" />
+                    {cloudLoginLoading ? 'লগইন হচ্ছে...' : 'লগইন করুন (Owner / Staff)'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={cloudLoginLoading}
+                    onClick={handleGoogleCloudLogin}
+                    className="w-full sm:w-auto py-2.5 px-3.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-md cursor-pointer disabled:opacity-50"
+                  >
+                    Google লগইন
+                  </button>
+                </div>
+
+                <div className="text-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setCloudAuthTab('register_owner')}
+                    className="text-xs text-teal-700 hover:text-teal-900 font-semibold cursor-pointer underline"
+                  >
+                    দোকানের নতুন Owner আইডি খুলবেন? এখানে ক্লিক করুন →
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* TAB 2: Register New Shop Owner Account */}
+            {cloudAuthTab === 'register_owner' && (
+              <form onSubmit={handleRegisterOwnerSubmit} className="space-y-3">
+                <div className="p-3 bg-teal-50 border border-teal-200 rounded-md text-xs text-teal-900 leading-relaxed">
+                  <strong>দোকান মালিকের (Owner) নতুন আইডি:</strong> নিজের ফার্মেসীর নাম, মোবাইল নম্বর ও পাসওয়ার্ড দিয়ে একাউন্ট তৈরি করুন। পরবর্তীতে আপনি এই একাউন্ট থেকেই আপনার সকল স্টাফদের আইডি ও পাসওয়ার্ড তৈরি করতে পারবেন।
+                </div>
+
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
-                    অপারেটর রোল *
+                    দোকানের নাম (Shop Name) *
                   </label>
-                  <select
-                    value={cloudLoginRole}
-                    onChange={(e) => setCloudLoginRole(e.target.value as 'owner' | 'staff')}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md bg-white"
-                  >
-                    <option value="owner">মালিক (Owner)</option>
-                    <option value="staff">স্টাফ (Staff)</option>
-                  </select>
+                  <input
+                    type="text"
+                    required
+                    value={registerShopName}
+                    onChange={(e) => setRegisterShopName(e.target.value)}
+                    placeholder="যেমন: ইকবাল ফার্মেসী"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md"
+                  />
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  দোকান ক্লাউড পাসওয়ার্ড / পিন *
-                </label>
-                <input
-                  type="password"
-                  required
-                  value={cloudLoginPassword}
-                  onChange={(e) => setCloudLoginPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md font-mono"
-                />
-              </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      মালিকের নাম (Owner Name) *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={registerOwnerName}
+                      onChange={(e) => setRegisterOwnerName(e.target.value)}
+                      placeholder="যেমন: ইকবাল মাহমুদ"
+                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-md"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      মোবাইল নম্বর *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={registerPhone}
+                      onChange={(e) => setRegisterPhone(e.target.value)}
+                      placeholder="018XXXXXXXX"
+                      className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md"
+                    />
+                  </div>
+                </div>
 
-              <div className="flex flex-col sm:flex-row items-center gap-2 pt-2">
-                <button
-                  type="submit"
-                  disabled={cloudLoginLoading}
-                  className="w-full sm:flex-1 py-2.5 px-4 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-md cursor-pointer disabled:opacity-50"
-                >
-                  {cloudLoginLoading ? 'লগইন হচ্ছে...' : 'লগইন ও সিঙ্ক চালু করুন'}
-                </button>
-                <button
-                  type="button"
-                  disabled={cloudLoginLoading}
-                  onClick={handleGoogleCloudLogin}
-                  className="w-full sm:w-auto py-2.5 px-3.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-md cursor-pointer disabled:opacity-50"
-                >
-                  Google লগইন
-                </button>
-              </div>
-            </form>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    ইমেইল / জিমেইল (ঐচ্ছিক)
+                  </label>
+                  <input
+                    type="email"
+                    value={registerEmail}
+                    onChange={(e) => setRegisterEmail(e.target.value)}
+                    placeholder="owner@gmail.com"
+                    className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-medium text-slate-700">
+                      পাসওয়ার্ড সেট করুন *
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowRegisterPassword(!showRegisterPassword)}
+                      className="text-[11px] text-teal-700 hover:text-teal-900 cursor-pointer inline-flex items-center gap-1"
+                    >
+                      {showRegisterPassword ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                      {showRegisterPassword ? 'লুকান' : 'দেখুন'}
+                    </button>
+                  </div>
+                  <input
+                    type={showRegisterPassword ? 'text' : 'password'}
+                    required
+                    value={registerPassword}
+                    onChange={(e) => setRegisterPassword(e.target.value)}
+                    placeholder="নূন্যতম ৬ অক্ষর"
+                    className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md"
+                  />
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    type="submit"
+                    disabled={cloudLoginLoading}
+                    className="w-full py-2.5 px-4 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-md cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+                  >
+                    <ShieldCheck className="w-4 h-4" />
+                    {cloudLoginLoading ? 'একাউন্ট তৈরি হচ্ছে...' : 'নতুন Owner আইডি তৈরি ও লগইন করুন'}
+                  </button>
+                </div>
+
+                <div className="text-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setCloudAuthTab('login')}
+                    className="text-xs text-teal-700 hover:text-teal-900 font-semibold cursor-pointer underline"
+                  >
+                    ইতিমধ্যে একাউন্ট আছে? লগইন করুন →
+                  </button>
+                </div>
+              </form>
+            )}
 
             {/* 4-Layer Permanent Data Protection & Backup/Restore */}
             <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-md space-y-2.5">

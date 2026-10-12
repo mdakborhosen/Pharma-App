@@ -142,13 +142,15 @@ service cloud.firestore {
         'ownerId', 'name', 'roleTitle', 'phone', 'shift',
         'counterName', 'active', 'createdAt', 'updatedAt'
       ]) && data.keys().hasOnly([
-        'ownerId', 'name', 'roleTitle', 'phone', 'shift',
+        'ownerId', 'name', 'roleTitle', 'phone', 'email', 'password', 'shift',
         'counterName', 'active', 'createdAt', 'updatedAt'
       ])
       && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$')
       && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
       && data.roleTitle is string && data.roleTitle.size() <= 30 && data.roleTitle in ['owner', 'manager', 'pharmacist', 'salesman']
       && data.phone is string && data.phone.size() >= 1 && data.phone.size() <= 30
+      && (!('email' in data) || (data.email is string && data.email.size() <= 120))
+      && (!('password' in data) || (data.password is string && data.password.size() <= 100))
       && data.shift is string && data.shift.size() >= 1 && data.shift.size() <= 60
       && data.counterName is string && data.counterName.size() >= 1 && data.counterName.size() <= 60
       && data.active is bool
@@ -323,7 +325,7 @@ service cloud.firestore {
         && (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time)
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly([
-          'ownerId', 'name', 'roleTitle', 'phone', 'shift', 'counterName', 'active', 'createdAt', 'updatedAt'
+          'ownerId', 'name', 'roleTitle', 'phone', 'email', 'password', 'shift', 'counterName', 'active', 'createdAt', 'updatedAt'
         ]);
       allow delete: if isSignedIn() && isVerified() && isValidId(staffId);
     }
