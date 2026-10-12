@@ -1,0 +1,213 @@
+export type DosageFormType =
+  | 'Tablet'
+  | 'Capsule'
+  | 'Syrup'
+  | 'Suspension'
+  | 'Suppository'
+  | 'Inhaler'
+  | 'Sachet'
+  | 'Eye Drop'
+  | 'Ear Drop'
+  | 'Nasal Drop'
+  | 'Drops'
+  | 'Injection'
+  | 'Gel';
+
+export interface MedicineCatalogItem {
+  id: string;
+  brandName: string;
+  genericName: string;
+  companyName: string;
+  strength: string;
+  dosageForm: DosageFormType;
+  packSize: string;
+  unitsPerStrip: number;
+  purchasePrice?: number; // Purchase price (ক্রয় মূল্য) per unit in BDT (৳)
+  unitPrice: number; // Selling price (বিক্রয় মূল্য / MRP) per unit in BDT (৳)
+  stripPrice: number; // Selling price (বিক্রয় মূল্য / MRP) per strip in BDT (৳)
+  therapeuticClass: string;
+  indication: string;
+  darNo: string;
+  availableDosages?: string; // e.g., "20 mg, 40 mg Capsule / IV Injection"
+  isCustom?: boolean;
+  isCoreProduct?: boolean;
+  hasPriceOverride?: boolean;
+}
+
+export interface ShopProfile {
+  id: string;
+  ownerId: string;
+  shopName: string;
+  licenseNo: string;
+  phone: string;
+  address: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  updatedAtMs?: number;
+}
+
+export interface InventoryItem {
+  id: string;
+  ownerId: string;
+  medicineId: string;
+  brandName: string;
+  genericName: string;
+  companyName: string;
+  strength: string;
+  dosageForm: string;
+  packSize: string;
+  purchasePrice: number;
+  unitPrice: number;
+  stripPrice: number;
+  stockQty: number;
+  minStockLevel: number;
+  batchNo: string;
+  expiryDate: string;
+  shelfLocation: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  updatedAtMs?: number;
+}
+
+export interface Customer {
+  id: string;
+  ownerId: string;
+  name: string;
+  phone: string;
+  address: string;
+  totalPurchased: number;
+  totalPaid: number;
+  totalDue: number;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  updatedAtMs?: number;
+}
+
+export interface Transaction {
+  id: string;
+  ownerId: string;
+  txType: 'sale' | 'purchase' | 'due_payment';
+  invoiceNo: string;
+  dateStr: string;
+  partyId: string;
+  partyName: string;
+  partyPhone: string;
+  itemsSummary: string;
+  totalCount: number;
+  subTotal: number;
+  discount: number;
+  grandTotal: number;
+  paidAmount: number;
+  dueAmount: number;
+  paymentMethod: 'cash' | 'bkash' | 'nagad' | 'card' | 'due';
+  staffName: string; // Shows "Owner" for shop owner, or specific staff name for staff
+  staffRole: 'owner' | 'staff';
+  counterName: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  updatedAtMs?: number;
+}
+
+export interface StaffMember {
+  id: string;
+  ownerId: string;
+  name: string; // For owner, displays "Owner", for staff displays their specific name
+  roleTitle: 'owner' | 'manager' | 'pharmacist' | 'salesman';
+  phone: string;
+  shift: string;
+  counterName: string;
+  active: boolean;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  updatedAtMs?: number;
+}
+
+export interface CustomMedicine {
+  id: string;
+  ownerId: string;
+  brandName: string;
+  genericName: string;
+  companyName: string;
+  strength: string;
+  dosageForm: string;
+  packSize: string;
+  purchasePrice?: number;
+  unitPrice: number;
+  stripPrice: number;
+  therapeuticClass: string;
+  indication: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  updatedAtMs?: number;
+}
+
+export interface PriceWatch {
+  id: string;
+  ownerId: string;
+  medicineId: string;
+  brandName: string;
+  genericName: string;
+  companyName: string;
+  strength: string;
+  baselineUnitPrice: number;
+  currentUnitPrice: number;
+  targetAlertPrice: number;
+  notifyOnAnyChange: boolean;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  updatedAtMs?: number;
+}
+
+export interface PriceAlert {
+  id: string;
+  ownerId: string;
+  medicineId: string;
+  brandName: string;
+  genericName: string;
+  companyName: string;
+  strength: string;
+  oldUnitPrice: number;
+  newUnitPrice: number;
+  oldStripPrice: number;
+  newStripPrice: number;
+  changedBy: string; // "Owner" or specific staff name
+  dateStr: string;
+  isRead: boolean;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  updatedAtMs?: number;
+}
+
+export interface CartItem {
+  medicineId: string;
+  inventoryId?: string;
+  brandName: string;
+  genericName: string;
+  companyName: string;
+  strength: string;
+  dosageForm: string;
+  unitPrice: number; // Editable directly in POS before creating invoice
+  originalUnitPrice?: number;
+  purchasePrice: number;
+  originalPurchasePrice?: number;
+  qty: number;
+  availableStock: number;
+}
+
+export interface PurchaseCartItem {
+  medicineId: string;
+  inventoryId?: string;
+  brandName: string;
+  genericName: string;
+  companyName: string;
+  strength: string;
+  dosageForm: string;
+  packSize: string;
+  purchasePrice: number; // Editable unit purchase price (৳)
+  unitPrice: number; // Editable retail MRP per unit (৳)
+  qty: number; // Purchased quantity (increases stock)
+  batchNo: string;
+  expiryDate: string;
+  availableStock: number;
+}
+
