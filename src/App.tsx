@@ -327,7 +327,7 @@ function buildTransactionCloudPayload(tx: Transaction, ownerId = SHARED_PHARMACY
     partyId: sanitizeString(tx.partyId, 128, 'walk-in'),
     partyName: sanitizeString(tx.partyName, 120, 'সাধারণ ক্রেতা'),
     partyPhone: sanitizeString(tx.partyPhone, 30, 'N/A'),
-    itemsSummary: sanitizeString(tx.itemsSummary, 600, 'ঔষধ বিক্রয়'),
+    itemsSummary: sanitizeString(tx.itemsSummary, 10000, 'ঔষধ বিক্রয়'),
     totalCount: sanitizeNumber(tx.totalCount, 0, 1000000),
     subTotal: sanitizeNumber(tx.subTotal),
     discount: sanitizeNumber(tx.discount),
@@ -2207,6 +2207,7 @@ export default function App() {
               originalPurchasePrice: basePurPrice,
               qty,
               availableStock: currentStock > 0 ? currentStock : 100,
+              updateStock: true,
             },
           ];
       saveLocal(STORAGE_KEYS.POS_CART, next);
@@ -2271,6 +2272,7 @@ export default function App() {
     purchasePrice?: number;
     qty: number;
     saveToCatalog?: boolean;
+    updateStock?: boolean;
   }) => {
     const cleanBrand = params.brandName.trim() || 'কাস্টম প্রডাক্ট';
     const cleanStrength = (params.strength || '').trim();
@@ -2315,6 +2317,7 @@ export default function App() {
                   unitPrice,
                   purchasePrice,
                   qty: item.qty + qty,
+                  updateStock: params.updateStock !== undefined ? params.updateStock : item.updateStock !== false,
                 }
               : item
           )
@@ -2334,6 +2337,7 @@ export default function App() {
               originalPurchasePrice: purchasePrice,
               qty,
               availableStock: currentStock > 0 ? currentStock : 100,
+              updateStock: params.updateStock !== undefined ? params.updateStock : true,
             },
           ];
       saveLocal(STORAGE_KEYS.POS_CART, next);
@@ -2708,7 +2712,7 @@ export default function App() {
       posCart
         .map((i, idx) => formatCartItemInvoiceLine(i, idx))
         .join('\n'),
-      600
+      50000
     );
 
     const defaultInvNo = `INV-${getTodayDateStr().replace(/-/g, '').slice(2)}-${Math.floor(
@@ -2754,8 +2758,8 @@ export default function App() {
     };
 
     // Build updated inventory list:
-    // 1. If editing an existing invoice, first reverse its previous stock impact
-    // 2. Then decrease stockQty for the new sold items in posCart
+    // 1. If editing an existing invoice, first reverse its previous stock impact (excluding non-stock items)
+    // 2. Then decrease stockQty ONLY for sold items with updateStock !== false
     const modifiedInvMap = new Map<string, InventoryItem>();
     const nextInventoryList = inventory.map((inv) => ({ ...inv }));
 
@@ -2768,6 +2772,9 @@ export default function App() {
         fullCatalog
       );
       for (const pItem of oldParsedItems) {
+        if (pItem.tailText?.includes('নন-স্টক')) {
+          continue; // Non-stock items never touched inventory; do not reverse
+        }
         const matchedOld = findMatchingInventoryRecord(nextInventoryList, {
           medicineId: pItem.matchedMedicine?.id,
           brandName: pItem.matchedMedicine?.brandName || pItem.brandAndStrength,
@@ -2788,6 +2795,11 @@ export default function App() {
     }
 
     for (const cartItem of posCart) {
+      // If updateStock is explicitly false, do not change stock or inventory
+      if (cartItem.updateStock === false) {
+        continue;
+      }
+
       const matchedInv = findMatchingInventoryRecord(nextInventoryList, {
         inventoryId: cartItem.inventoryId,
         medicineId: cartItem.medicineId,
@@ -2925,10 +2937,16 @@ export default function App() {
     setPosCart([]);
     saveLocal(STORAGE_KEYS.POS_CART, []);
     setEditingInvoiceTx(null);
+    const soldStockCount = posCart
+      .filter((i) => i.updateStock !== false)
+      .reduce((acc, i) => acc + i.qty, 0);
+    const nonStockSoldCount = posCart.filter((i) => i.updateStock === false).length;
     showToast(
       existingEditedTx
-        ? `বিক্রয় ইনভয়েস (${invoiceNo}) সফলভাবে এডিট হয়েছে ও স্টক সমন্বয় হয়েছে!`
-        : `বিক্রয় ইনভয়েস (${invoiceNo}) তৈরি হয়েছে ও স্টক থেকে -${totalCount} পিস কমানো হয়েছে!`
+        ? `বিক্রয় ইনভয়েস (${invoiceNo}) সফলভাবে এডিট হয়েছে!`
+        : soldStockCount > 0
+        ? `বিক্রয় ইনভয়েস (${invoiceNo}) তৈরি হয়েছে ও স্টক থেকে -${soldStockCount} পিস কমানো হয়েছে${nonStockSoldCount > 0 ? ` (${nonStockSoldCount}টি নন-স্টক আইটেম)` : ''}!`
+        : `বিক্রয় ইনভয়েস (${invoiceNo}) তৈরি হয়েছে (শুধু ইনভয়েস, স্টক অপরিবর্তিত)!`
     );
     return newTx;
   };
@@ -2944,6 +2962,7 @@ export default function App() {
     defaultExpiryDate?: string;
     dateStr?: string;
     editingTxId?: string;
+    syncModifiedPricesToCatalog?: boolean;
   }): Promise<Transaction | null> => {
     if (purchaseCart.length === 0) return null;
 
@@ -2965,7 +2984,7 @@ export default function App() {
       purchaseCart
         .map((i, idx) => formatPurchaseItemInvoiceLine(i, idx))
         .join('\n'),
-      600
+      50000
     );
 
     const invoiceNo = sanitizeString(
@@ -3014,8 +3033,8 @@ export default function App() {
       updatedAtMs: nowMs,
     };
 
-    // 1. If editing an existing purchase invoice, first reverse its old stock addition
-    // 2. Then increase stockQty in inventory for every item in purchaseCart (ক্রয় করলে স্টক বাড়বে)
+    // 1. If editing an existing purchase invoice, first reverse its old stock addition (excluding non-stock items)
+    // 2. Then increase stockQty in inventory ONLY for items where updateStock !== false (✅ স্টকে যুক্ত হবে)
     const nextInventoryList = inventory.map((inv) => ({ ...inv }));
     const changedInvMap = new Map<string, InventoryItem>();
 
@@ -3028,6 +3047,9 @@ export default function App() {
         fullCatalog
       );
       for (const pItem of oldParsedItems) {
+        if (pItem.tailText?.includes('নন-স্টক')) {
+          continue; // Non-stock items never touched inventory; do not reverse
+        }
         const matchedOld = findMatchingInventoryRecord(nextInventoryList, {
           medicineId: pItem.matchedMedicine?.id,
           brandName: pItem.matchedMedicine?.brandName || pItem.brandAndStrength,
@@ -3048,47 +3070,55 @@ export default function App() {
     }
 
     for (const purItem of purchaseCart) {
-      const baseMed = fullCatalog.find((m) => m.id === purItem.medicineId);
-      if (baseMed) {
-        const oldPur =
-          typeof baseMed.purchasePrice === 'number' && baseMed.purchasePrice > 0
-            ? baseMed.purchasePrice
-            : Number((baseMed.unitPrice * 0.88).toFixed(2));
-        if (
-          Math.abs(baseMed.unitPrice - purItem.unitPrice) > 0.001 ||
-          Math.abs(oldPur - purItem.purchasePrice) > 0.001
-        ) {
-          await handleSaveMedicineCatalog(
-            {
-              brandName: purItem.brandName || baseMed.brandName,
-              genericName: purItem.genericName || baseMed.genericName,
-              companyName: params.supplierCompany || baseMed.companyName,
-              strength: purItem.strength || baseMed.strength,
-              dosageForm: purItem.dosageForm || baseMed.dosageForm,
-              packSize: baseMed.packSize,
-              purchasePrice: purItem.purchasePrice,
-              unitPrice: purItem.unitPrice,
-              stripPrice: Number((purItem.unitPrice * (baseMed.unitsPerStrip || 10)).toFixed(2)),
-              therapeuticClass: baseMed.therapeuticClass,
-              indication: baseMed.indication,
-            },
-            baseMed
-          );
+      // If updateStock is explicitly false (not checked), DO NOT touch stock, DO NOT touch inventory
+      if (purItem.updateStock === false) {
+        continue;
+      }
+
+      // Only sync modified master catalog price if user explicitly chose syncModifiedPricesToCatalog
+      if (params.syncModifiedPricesToCatalog) {
+        const baseMed = fullCatalog.find((m) => m.id === purItem.medicineId);
+        if (baseMed) {
+          const oldPur =
+            typeof baseMed.purchasePrice === 'number' && baseMed.purchasePrice > 0
+              ? baseMed.purchasePrice
+              : Number((baseMed.unitPrice * 0.88).toFixed(2));
+          if (
+            Math.abs(baseMed.unitPrice - purItem.unitPrice) > 0.001 ||
+            Math.abs(oldPur - purItem.purchasePrice) > 0.001
+          ) {
+            await handleSaveMedicineCatalog(
+              {
+                brandName: purItem.brandName || baseMed.brandName,
+                genericName: purItem.genericName || baseMed.genericName,
+                companyName: params.supplierCompany || baseMed.companyName,
+                strength: purItem.strength || baseMed.strength,
+                dosageForm: purItem.dosageForm || baseMed.dosageForm,
+                packSize: baseMed.packSize,
+                purchasePrice: purItem.purchasePrice,
+                unitPrice: purItem.unitPrice,
+                stripPrice: Number((purItem.unitPrice * (baseMed.unitsPerStrip || 10)).toFixed(2)),
+                therapeuticClass: baseMed.therapeuticClass,
+                indication: baseMed.indication,
+              },
+              baseMed
+            );
+          }
+        } else if (purItem.brandName.trim()) {
+          await handleSaveMedicineCatalog({
+            brandName: purItem.brandName.trim(),
+            genericName: (purItem.genericName || purItem.brandName).trim(),
+            companyName: (params.supplierCompany || purItem.companyName || 'Custom / General').trim(),
+            strength: (purItem.strength || 'Standard').trim(),
+            dosageForm: (purItem.dosageForm || 'Tablet').trim(),
+            packSize: purItem.packSize || '10 × 10 (100 pcs)',
+            purchasePrice: purItem.purchasePrice,
+            unitPrice: purItem.unitPrice,
+            stripPrice: Number((purItem.unitPrice * 10).toFixed(2)),
+            therapeuticClass: 'Custom Product',
+            indication: 'কাস্টম প্রডাক্ট / সাধারণ ব্যবহার্য',
+          });
         }
-      } else if (purItem.brandName.trim()) {
-        await handleSaveMedicineCatalog({
-          brandName: purItem.brandName.trim(),
-          genericName: (purItem.genericName || purItem.brandName).trim(),
-          companyName: (params.supplierCompany || purItem.companyName || 'Custom / General').trim(),
-          strength: (purItem.strength || 'Standard').trim(),
-          dosageForm: (purItem.dosageForm || 'Tablet').trim(),
-          packSize: purItem.packSize || '10 × 10 (100 pcs)',
-          purchasePrice: purItem.purchasePrice,
-          unitPrice: purItem.unitPrice,
-          stripPrice: Number((purItem.unitPrice * 10).toFixed(2)),
-          therapeuticClass: 'Custom Product',
-          indication: 'কাস্টম প্রডাক্ট / সাধারণ ব্যবহার্য',
-        });
       }
 
       const existingInv = findMatchingInventoryRecord(nextInventoryList, {
@@ -3173,10 +3203,16 @@ export default function App() {
     setPurchaseCart([]);
     saveLocal(STORAGE_KEYS.PURCHASE_CART, []);
     setEditingInvoiceTx(null);
+    const addedStockCount = purchaseCart
+      .filter((i) => i.updateStock !== false)
+      .reduce((acc, i) => acc + i.qty, 0);
+    const nonStockPurCount = purchaseCart.filter((i) => i.updateStock === false).length;
     showToast(
       existingEditedTx
-        ? `ক্রয় ইনভয়েস (${invoiceNo}) সফলভাবে এডিট হয়েছে ও স্টক সমন্বয় হয়েছে!`
-        : `ক্রয় ইনভয়েস (${invoiceNo}) তৈরি হয়েছে ও স্টকে +${totalCount} পিস যুক্ত হয়েছে!`
+        ? `ক্রয় ইনভয়েস (${invoiceNo}) সফলভাবে এডিট হয়েছে!`
+        : addedStockCount > 0
+        ? `ক্রয় ইনভয়েস (${invoiceNo}) তৈরি হয়েছে ও স্টকে +${addedStockCount} পিস যুক্ত হয়েছে${nonStockPurCount > 0 ? ` (${nonStockPurCount}টি নন-স্টক আইটেম)` : ''}!`
+        : `ক্রয় ইনভয়েস (${invoiceNo}) তৈরি হয়েছে (শুধু ইনভয়েস, স্টক অপরিবর্তিত)!`
     );
     return newTx;
   };

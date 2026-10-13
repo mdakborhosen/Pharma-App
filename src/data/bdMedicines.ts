@@ -5176,6 +5176,7 @@ export function formatCartItemInvoiceLine(
     dosageForm: string;
     unitPrice: number;
     qty: number;
+    updateStock?: boolean;
   },
   index: number
 ): string {
@@ -5186,7 +5187,8 @@ export function formatCartItemInvoiceLine(
   const cleanStrength =
     item.strength && item.strength.trim() !== 'Standard' ? item.strength.trim() : '';
   const nameAndStrength = cleanStrength ? `${cleanBrand} ${cleanStrength}` : cleanBrand;
-  return `${index + 1}.${prefix}.${nameAndStrength} (৳${unitStr}) × ${item.qty}=${totalStr}`;
+  const stockTag = item.updateStock === false ? ' [নন-স্টক/শুধু-বিল]' : '';
+  return `${index + 1}.${prefix}.${nameAndStrength} (৳${unitStr}) × ${item.qty}=${totalStr}${stockTag}`;
 }
 
 export function formatPurchaseItemInvoiceLine(
@@ -5196,6 +5198,11 @@ export function formatPurchaseItemInvoiceLine(
     dosageForm: string;
     purchasePrice: number;
     qty: number;
+    updateStock?: boolean;
+    packUnit?: string;
+    packCount?: number;
+    unitsPerPack?: number;
+    packDetailFormula?: string;
   },
   index: number
 ): string {
@@ -5206,13 +5213,32 @@ export function formatPurchaseItemInvoiceLine(
   const cleanStrength =
     item.strength && item.strength.trim() !== 'Standard' ? item.strength.trim() : '';
   const nameAndStrength = cleanStrength ? `${cleanBrand} ${cleanStrength}` : cleanBrand;
-  return `${index + 1}.${prefix}.${nameAndStrength} (৳${unitStr}) × ${item.qty}=${totalStr}`;
+  const stockTag = item.updateStock === false ? ' [নন-স্টক/শুধু-বিল]' : '';
+
+  let packDetail = '';
+  if (item.packUnit && item.packUnit !== 'piece' && item.packCount && item.packCount > 0) {
+    const unitLabel = item.packUnit === 'strip' ? 'পাতা' : item.packUnit === 'box' ? 'বক্স' : 'কার্টুন';
+    const formulaStr = item.packDetailFormula
+      ? ` (${item.packDetailFormula})`
+      : item.packUnit === 'strip'
+      ? ` (১*${item.unitsPerPack || 10})`
+      : item.packUnit === 'box'
+      ? ` (${item.unitsPerPack || 510} পিস)`
+      : ` (১*${item.unitsPerPack || 48})`;
+    packDetail = ` [${item.packCount} ${unitLabel}${formulaStr}]`;
+  } else if (item.packUnit === 'piece' && item.packCount) {
+    packDetail = ` [${item.qty} পিস]`;
+  }
+
+  return `${index + 1}.${prefix}.${nameAndStrength}${packDetail} (৳${unitStr}) × ${item.qty}=${totalStr}${stockTag}`;
 }
 
 export interface ParsedInvoiceItem {
   serial: number;
   formPrefix: string;
   brandAndStrength: string;
+  cleanName?: string;
+  packDetail?: string;
   unitPrice: number;
   qty: number;
   lineTotal: number;
@@ -5341,15 +5367,24 @@ export function parseTransactionItemsDetailed(
       const serial = parseInt(match[1], 10) || idx + 1;
       const formPrefix = match[2].trim().toLowerCase();
       const brandAndStrength = match[3].trim();
+      let cleanBrandAndStrength = brandAndStrength;
+      let packDetail = '';
+      const packMatch = brandAndStrength.match(/^(.*?)\s*\[(.*?)\]$/);
+      if (packMatch) {
+        cleanBrandAndStrength = packMatch[1].trim();
+        packDetail = packMatch[2].trim();
+      }
       const unitPrice = parseFloat(match[4]) || 0;
       const qty = parseInt(match[5], 10) || 1;
       const lineTotal = parseFloat(match[6]) || Number((unitPrice * qty).toFixed(2));
       const tailText = (match[7] || '').trim();
-      const matchedMedicine = findCatalogMedicineByText(brandAndStrength, catalog);
+      const matchedMedicine = findCatalogMedicineByText(cleanBrandAndStrength, catalog);
       return {
         serial,
         formPrefix,
         brandAndStrength,
+        cleanName: cleanBrandAndStrength,
+        packDetail,
         unitPrice,
         qty,
         lineTotal,
@@ -5550,6 +5585,7 @@ export function buildSaleCartFromTransaction(
         originalPurchasePrice: basePurPrice,
         qty: Math.max(1, pItem.qty || 1),
         availableStock: currentStock > 0 ? currentStock : 100,
+        updateStock: !pItem.tailText?.includes('নন-স্টক'),
       });
     }
   });
@@ -5630,6 +5666,16 @@ export function buildPurchaseCartFromTransaction(
         batchNo: invMatch?.batchNo || `B-${Math.floor(1000 + Math.random() * 9000)}`,
         expiryDate: invMatch?.expiryDate || '2028-06-30',
         availableStock: currentStock,
+        updateStock: !pItem.tailText?.includes('নন-স্টক'),
+        packUnit: pItem.packDetail?.includes('পাতা')
+          ? 'strip'
+          : pItem.packDetail?.includes('বক্স')
+          ? 'box'
+          : pItem.packDetail?.includes('কার্টুন')
+          ? 'cartoon'
+          : 'piece',
+        packCount: parseInt((pItem.packDetail || '').match(/^(\d+)/)?.[1] || '1', 10) || 1,
+        packDetailFormula: (pItem.packDetail || '').match(/\((.*?)\)/)?.[1] || '',
       });
     }
   });

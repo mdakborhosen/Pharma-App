@@ -122,7 +122,7 @@ service cloud.firestore {
       && data.partyId is string && data.partyId.size() >= 1 && data.partyId.size() <= 128
       && data.partyName is string && data.partyName.size() >= 1 && data.partyName.size() <= 120
       && data.partyPhone is string && data.partyPhone.size() >= 1 && data.partyPhone.size() <= 30
-      && data.itemsSummary is string && data.itemsSummary.size() >= 1 && data.itemsSummary.size() <= 600
+      && data.itemsSummary is string && data.itemsSummary.size() >= 1 && data.itemsSummary.size() <= 10000
       && data.totalCount is number && data.totalCount >= 0 && data.totalCount <= 1000000
       && data.subTotal is number && data.subTotal >= 0 && data.subTotal <= 100000000
       && data.discount is number && data.discount >= 0 && data.discount <= 100000000

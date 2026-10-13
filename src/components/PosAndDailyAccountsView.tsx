@@ -4,6 +4,7 @@ import {
   ArrowUpRight,
   Edit3,
   FileText,
+  Info,
   Minus,
   PackageCheck,
   PackageMinus,
@@ -113,6 +114,7 @@ interface PosAndDailyAccountsViewProps {
     paymentMethod: Transaction['paymentMethod'];
     dateStr?: string;
     editingTxId?: string;
+    syncModifiedPricesToCatalog?: boolean;
   }) => Promise<Transaction | null>;
   onRecordPurchase: (params: {
     supplierCompany: string;
@@ -261,6 +263,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
   const [purDiscountStr, setPurDiscountStr] = useState('0');
   const [purPaidStr, setPurPaidStr] = useState('');
   const [purPaymentMethod, setPurPaymentMethod] = useState<Transaction['paymentMethod']>('cash');
+  const [syncPurPricesToCatalog, setSyncPurPricesToCatalog] = useState<boolean>(false);
   const [submittingPurchase, setSubmittingPurchase] = useState(false);
 
   // Daily Cashbook Filter states
@@ -540,6 +543,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
           purDueAmount > 0 && effectivePurPaidAmount === 0 ? 'due' : purPaymentMethod,
         dateStr: purDateStr.trim() || getTodayDateStr(),
         editingTxId: !asBrandNewInvoice && isEditingPurchase ? editingInvoiceTx?.id : undefined,
+        syncModifiedPricesToCatalog: syncPurPricesToCatalog,
       });
       resetPurchaseFormToFresh();
       if (createdTx) {
@@ -661,7 +665,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
   return (
     <div className="space-y-6">
       {/* Active Owner / Staff Entry Identity Bar */}
-      <div className="bg-white border border-slate-200 rounded-lg p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-white border border-slate-200 rounded-lg p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 no-print">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-teal-50 border border-teal-200 flex items-center justify-center text-teal-700 shrink-0">
             <UserCheck className="w-5 h-5" />
@@ -706,7 +710,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
       {/* Two Distinct Invoice Modes: 1. Sales Invoice (Decreases Stock) | 2. Purchase Invoice (Increases Stock) */}
       <div
         ref={invoiceBuilderRef}
-        className={`bg-white border rounded-lg overflow-hidden transition-colors ${
+        className={`bg-white border rounded-lg overflow-hidden transition-colors no-print ${
           editingInvoiceTx
             ? 'border-amber-500 ring-2 ring-amber-200/80'
             : 'border-slate-200'
@@ -1138,13 +1142,37 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                       + নতুন কাস্টম লাইন যোগ
                     </button>
                     {posCart.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={onClearCart}
-                        className="text-xs text-red-600 hover:underline cursor-pointer"
-                      >
-                        মেমো খালি করুন
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            posCart.forEach((item) => {
+                              onUpdateCartItemDetails(item.medicineId, { updateStock: true });
+                            });
+                          }}
+                          className="px-2 py-0.5 text-[11px] font-medium text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded cursor-pointer"
+                        >
+                          সবগুলোতে ✅ স্টক কমবে
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            posCart.forEach((item) => {
+                              onUpdateCartItemDetails(item.medicineId, { updateStock: false });
+                            });
+                          }}
+                          className="px-2 py-0.5 text-[11px] font-medium text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded cursor-pointer"
+                        >
+                          সবগুলো শুধু ইনভয়েস
+                        </button>
+                        <button
+                          type="button"
+                          onClick={onClearCart}
+                          className="text-xs text-red-600 hover:underline cursor-pointer ml-1"
+                        >
+                          মেমো খালি করুন
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -1260,13 +1288,54 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                                     </span>
                                   )}
                                 </div>
-                                <div className="text-[11px] font-mono text-amber-800 mt-0.5 flex items-center gap-1">
-                                  <ArrowDownRight className="w-3 h-3 text-amber-700 shrink-0" />
-                                  <span>
-                                    স্টক কমবে: বর্তমান {currentStock} পিস → বিক্রয়ের পর{' '}
-                                    <strong>{remainingStock} পিস</strong> (-{item.qty})
-                                  </span>
+
+                                <div className="flex flex-wrap items-center gap-2 mt-1">
+                                  <label
+                                    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs border select-none cursor-pointer transition-colors ${
+                                      item.updateStock !== false
+                                        ? 'bg-teal-50 border-teal-300 text-teal-900 hover:bg-teal-100 font-semibold'
+                                        : 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100 font-medium'
+                                    }`}
+                                    title={
+                                      item.updateStock !== false
+                                        ? 'স্টক থেকে কমবে (টিক চিহ্ন তুলে দিলে স্টক পরিবর্তন হবে না, শুধু ইনভয়েস তৈরি হবে)'
+                                        : 'স্টকে পরিবর্তন হবে না (শুধু ইনভয়েস তৈরি হবে)'
+                                    }
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={item.updateStock !== false}
+                                      onChange={(e) =>
+                                        onUpdateCartItemDetails(item.medicineId, {
+                                          updateStock: e.target.checked,
+                                        })
+                                      }
+                                      className="w-3.5 h-3.5 rounded text-teal-600 focus:ring-teal-500 cursor-pointer"
+                                    />
+                                    <span className="text-[11px]">
+                                      {item.updateStock !== false
+                                        ? '✅ স্টক থেকে কমবে'
+                                        : '❌ স্টকে কমবে না (শুধু ইনভয়েস)'}
+                                    </span>
+                                  </label>
                                 </div>
+
+                                {item.updateStock !== false ? (
+                                  <div className="text-[11px] font-mono text-amber-800 mt-0.5 flex items-center gap-1">
+                                    <ArrowDownRight className="w-3 h-3 text-amber-700 shrink-0" />
+                                    <span>
+                                      স্টক কমবে: বর্তমান {currentStock} পিস → বিক্রয়ের পর{' '}
+                                      <strong>{remainingStock} পিস</strong> (-{item.qty})
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div className="text-[11px] font-mono text-amber-800 mt-0.5 flex items-center gap-1">
+                                    <Info className="w-3 h-3 text-amber-600 shrink-0" />
+                                    <span>
+                                      স্টক অপরিবর্তিত থাকবে (বর্তমান {currentStock} পিস) · শুধু ইনভয়েসে যুক্ত থাকবে
+                                    </span>
+                                  </div>
+                                )}
                               </td>
 
                               {/* Editable Purchase Price Input */}
@@ -1894,13 +1963,37 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                       + নতুন কাস্টম লাইন যোগ
                     </button>
                     {purchaseCart.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={onClearPurchaseCart}
-                        className="text-xs text-red-600 hover:underline cursor-pointer"
-                      >
-                        ক্রয় তালিকা খালি করুন
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            purchaseCart.forEach((item) => {
+                              onUpdatePurchaseCartItemDetails(item.medicineId, { updateStock: true });
+                            });
+                          }}
+                          className="px-2 py-0.5 text-[11px] font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded cursor-pointer"
+                        >
+                          সবগুলোতে ✅ স্টকে যুক্ত
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            purchaseCart.forEach((item) => {
+                              onUpdatePurchaseCartItemDetails(item.medicineId, { updateStock: false });
+                            });
+                          }}
+                          className="px-2 py-0.5 text-[11px] font-medium text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded cursor-pointer"
+                        >
+                          সবগুলো শুধু ইনভয়েস
+                        </button>
+                        <button
+                          type="button"
+                          onClick={onClearPurchaseCart}
+                          className="text-xs text-red-600 hover:underline cursor-pointer ml-1"
+                        >
+                          ক্রয় তালিকা খালি করুন
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -2002,13 +2095,54 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                                   (৳{formatCleanMoney(item.purchasePrice)}) × {item.qty}=
                                   {formatCleanMoney(lineTotal)}
                                 </div>
-                                <div className="text-[11px] font-mono text-emerald-700 mt-0.5 flex items-center gap-1">
-                                  <ArrowUpRight className="w-3 h-3 text-emerald-600 shrink-0" />
-                                  <span>
-                                    স্টক বাড়বে: বর্তমান {currentStock} পিস → ক্রয়ের পর{' '}
-                                    <strong>{afterStock} পিস</strong> (+{item.qty})
-                                  </span>
+
+                                <div className="flex flex-wrap items-center gap-2 mt-1">
+                                  <label
+                                    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs border select-none cursor-pointer transition-colors ${
+                                      item.updateStock !== false
+                                        ? 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100 font-semibold'
+                                        : 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100 font-medium'
+                                    }`}
+                                    title={
+                                      item.updateStock !== false
+                                        ? 'স্টকে যুক্ত হবে (ক্লিক করে টিক চিহ্ন তুলে দিলে স্টকে যুক্ত না হয়ে শুধু ইনভয়েস তৈরি হবে)'
+                                        : 'স্টকে যুক্ত হবে না (শুধু ইনভয়েস তৈরি হবে)'
+                                    }
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={item.updateStock !== false}
+                                      onChange={(e) =>
+                                        onUpdatePurchaseCartItemDetails(item.medicineId, {
+                                          updateStock: e.target.checked,
+                                        })
+                                      }
+                                      className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                                    />
+                                    <span className="text-[11px]">
+                                      {item.updateStock !== false
+                                        ? '✅ স্টকে যুক্ত হবে'
+                                        : '❌ স্টকে যুক্ত হবে না (শুধু ইনভয়েস)'}
+                                    </span>
+                                  </label>
                                 </div>
+
+                                {item.updateStock !== false ? (
+                                  <div className="text-[11px] font-mono text-emerald-700 mt-0.5 flex items-center gap-1">
+                                    <ArrowUpRight className="w-3 h-3 text-emerald-600 shrink-0" />
+                                    <span>
+                                      স্টক বাড়বে: বর্তমান {currentStock} পিস → ক্রয়ের পর{' '}
+                                      <strong>{afterStock} পিস</strong> (+{item.qty})
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div className="text-[11px] font-mono text-amber-800 mt-0.5 flex items-center gap-1">
+                                    <Info className="w-3 h-3 text-amber-600 shrink-0" />
+                                    <span>
+                                      স্টক অপরিবর্তিত থাকবে (বর্তমান {currentStock} পিস) · শুধু ইনভয়েস ও মোট হিসাবে থাকবে
+                                    </span>
+                                  </div>
+                                )}
                               </td>
 
                               {/* Editable Purchase Unit Cost */}
@@ -2291,17 +2425,26 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                         </button>
                       </>
                     )}
-                    <button
-                      type="submit"
-                      disabled={purchaseCart.length === 0 || submittingPurchase}
-                      className="px-5 py-2.5 text-xs font-semibold text-white bg-indigo-700 hover:bg-indigo-800 rounded-md transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
-                    >
-                      {submittingPurchase
-                        ? 'ক্রয় ইনভয়েস সংরক্ষণ হচ্ছে...'
-                        : isEditingPurchase
-                        ? `এডিটকৃত ক্রয় ইনভয়েস সংরক্ষণ ও স্টক সমন্বয় করুন (${purInvoiceNo}) ✓`
-                        : `ক্রয় ইনভয়েস সম্পন্ন করুন ও স্টক বাড়ান (+${totalPurchaseUnits} পিস) ✓`}
-                    </button>
+                    {(() => {
+                      const stockedPurUnits = purchaseCart
+                        .filter((i) => i.updateStock !== false)
+                        .reduce((acc, i) => acc + i.qty, 0);
+                      return (
+                        <button
+                          type="submit"
+                          disabled={purchaseCart.length === 0 || submittingPurchase}
+                          className="px-5 py-2.5 text-xs font-semibold text-white bg-indigo-700 hover:bg-indigo-800 rounded-md transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
+                        >
+                          {submittingPurchase
+                            ? 'ক্রয় ইনভয়েস সংরক্ষণ হচ্ছে...'
+                            : isEditingPurchase
+                            ? `এডিটকৃত ক্রয় ইনভয়েস সংরক্ষণ করুন (${purInvoiceNo}) ✓`
+                            : stockedPurUnits > 0
+                            ? `ক্রয় ইনভয়েস সম্পন্ন করুন ও স্টক বাড়ান (+${stockedPurUnits} পিস) ✓`
+                            : `ক্রয় ইনভয়েস সম্পন্ন করুন (শুধু ইনভয়েস, স্টক অপরিবর্তিত) ✓`}
+                        </button>
+                      );
+                    })()}
                   </div>
                 </div>
               </form>
@@ -2311,7 +2454,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
       </div>
 
       {/* Daily Purchase & Sales Accounting Dashboard */}
-      <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+      <div className="bg-white border border-slate-200 rounded-lg overflow-hidden no-print">
         <div className="p-5 border-b border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-bold text-slate-900">
@@ -2591,7 +2734,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
 
       {/* Edit Transaction Modal */}
       {editingTx && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4 no-print">
           <div className="bg-white border border-slate-200 rounded-lg max-w-lg w-full p-6 shadow-xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200">
               <h3 className="text-base font-bold text-slate-900">
@@ -2751,8 +2894,8 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
          - template 2: প্রডাক্ট ক্রয় ইনভয়েস (PURCHASE INVOICE — স্টক বেড়েছে)
          ============================================================================ */}
       {previewInvoice && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white border border-slate-200 rounded-lg max-w-2xl w-full p-6 shadow-xl my-auto">
+        <div id="printable-invoice-modal" className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4 overflow-y-auto">
+          <div id="printable-invoice-receipt" className="bg-white border border-slate-200 rounded-lg max-w-2xl w-full p-6 shadow-xl my-auto">
             {/* Distinct Top Invoice Type Banner */}
             <div
               className={`mb-4 px-4 py-2.5 rounded-md border flex flex-wrap items-center justify-between gap-2 ${
@@ -2787,11 +2930,24 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                     : 'bg-white border-emerald-300 text-emerald-800'
                 }`}
               >
-                {previewInvoice.txType === 'purchase'
-                  ? `স্টক বৃদ্ধি (+${previewInvoice.totalCount} পিস যুক্ত হয়েছে)`
-                  : previewInvoice.txType === 'sale'
-                  ? `স্টক হ্রাস (-${previewInvoice.totalCount} পিস বিক্রয় হয়েছে)`
-                  : 'লেজার বকেয়া জমা'}
+                {(() => {
+                  const items = parsedPreviewItems;
+                  const nonStockCount = items.filter((i) => i.tailText?.includes('নন-স্টক')).length;
+                  const stockEffectQty = items
+                    .filter((i) => !i.tailText?.includes('নন-স্টক'))
+                    .reduce((sum, i) => sum + i.qty, 0);
+                  if (previewInvoice.txType === 'purchase') {
+                    return stockEffectQty > 0
+                      ? `স্টক বৃদ্ধি (+${stockEffectQty} পিস)${nonStockCount > 0 ? ` · ${nonStockCount}টি নন-স্টক` : ''}`
+                      : 'শুধু ইনভয়েস (স্টক অপরিবর্তিত)';
+                  }
+                  if (previewInvoice.txType === 'sale') {
+                    return stockEffectQty > 0
+                      ? `স্টক হ্রাস (-${stockEffectQty} পিস)${nonStockCount > 0 ? ` · ${nonStockCount}টি নন-স্টক` : ''}`
+                      : 'শুধু ইনভয়েস (স্টক অপরিবর্তিত)';
+                  }
+                  return 'লেজার বকেয়া জমা';
+                })()}
               </span>
             </div>
 
@@ -2906,7 +3062,11 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                             {pItem.qty} পিস
                           </td>
                           <td className="py-2 px-2 text-center">
-                            {previewInvoice.txType === 'purchase' ? (
+                            {pItem.tailText?.includes('নন-স্টক') ? (
+                              <span className="text-slate-600 font-semibold bg-slate-100 px-1.5 py-0.5 rounded text-[11px]">
+                                ০ পিস (শুধু ইনভয়েস)
+                              </span>
+                            ) : previewInvoice.txType === 'purchase' ? (
                               <span className="text-emerald-700 font-bold">
                                 +{pItem.qty} পিস (স্টক ইন)
                               </span>

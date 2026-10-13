@@ -194,7 +194,10 @@ export interface CartItem {
   originalPurchasePrice?: number;
   qty: number;
   availableStock: number;
+  updateStock?: boolean; // When true (default), decreases inventory stock; when false, only appears in invoice without touching stock
 }
+
+export type PurchasePackUnit = 'piece' | 'strip' | 'box' | 'cartoon';
 
 export interface PurchaseCartItem {
   medicineId: string;
@@ -205,11 +208,19 @@ export interface PurchaseCartItem {
   strength: string;
   dosageForm: string;
   packSize: string;
-  purchasePrice: number; // Editable unit purchase price (৳)
-  unitPrice: number; // Editable retail MRP per unit (৳)
-  qty: number; // Purchased quantity (increases stock)
+  purchasePrice: number; // Editable unit purchase price per piece (৳)
+  unitPrice: number; // Retail MRP per unit (৳)
+  qty: number; // Total purchased quantity in pieces
   batchNo: string;
   expiryDate: string;
   availableStock: number;
+  updateStock?: boolean; // When true (default), increases inventory stock; when false, only appears in invoice without touching stock
+  packUnit?: PurchasePackUnit; // 'piece' | 'strip' | 'box' | 'cartoon'
+  packCount?: number; // e.g. 1 পাতা, 2 বক্স, 1 কার্টুন
+  unitsPerPack?: number; // e.g. 10 pcs per পাতা, 100 pcs per বক্স, 48 pcs per কার্টুন
+  packRate?: number; // Price per pack (e.g. ৳25 per পাতা, ৳250 per বক্স, ৳1680 per কার্টুন)
+  packDetailFormula?: string; // e.g. '১*১০', '১*১০*৫১', '১*৪৮'
+  stripsPerBox?: number; // e.g. 51 পাতা per বক্স
+  pcsPerStrip?: number; // e.g. 10 পিস per পাতা
 }
 
