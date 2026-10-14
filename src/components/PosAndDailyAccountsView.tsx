@@ -36,6 +36,7 @@ import {
   InventoryItem,
   MedicineCatalogItem,
   PurchaseCartItem,
+  PurchasePackUnit,
   ShopProfile,
   StaffMember,
   Transaction,
@@ -81,7 +82,21 @@ interface PosAndDailyAccountsViewProps {
     editingTxId?: string;
   }) => Promise<Transaction | null>;
   purchaseCart: PurchaseCartItem[];
-  onAddToPurchaseCart: (med: MedicineCatalogItem, qty: number) => void;
+  onAddToPurchaseCart: (
+    med: MedicineCatalogItem,
+    qty?: number,
+    packOpts?: {
+      packUnit?: PurchasePackUnit;
+      packCount?: number;
+      unitsPerPack?: number;
+      packRate?: number;
+      packDetailFormula?: string;
+      stripsPerBox?: number;
+      pcsPerStrip?: number;
+      customCost?: number;
+      updateStock?: boolean;
+    }
+  ) => void;
   onAddCustomToPurchaseCart: (params: {
     brandName: string;
     genericName?: string;
@@ -93,7 +108,15 @@ interface PosAndDailyAccountsViewProps {
     qty: number;
     batchNo?: string;
     expiryDate?: string;
+    updateStock?: boolean;
     saveToCatalog?: boolean;
+    packUnit?: PurchasePackUnit;
+    packCount?: number;
+    unitsPerPack?: number;
+    packRate?: number;
+    packDetailFormula?: string;
+    stripsPerBox?: number;
+    pcsPerStrip?: number;
   }) => Promise<void>;
   onUpdatePurchaseCartQty: (medId: string, newQty: number) => void;
   onUpdatePurchaseCartCost: (medId: string, newCost: number) => void;
@@ -153,6 +176,12 @@ interface PosAndDailyAccountsViewProps {
   ) => Promise<void>;
   onDeleteTransaction: (tx: Transaction) => Promise<void>;
   shopProfile: ShopProfile;
+  onSaveMedicineCatalog?: (
+    medData: Omit<MedicineCatalogItem, 'id' | 'darNo' | 'unitsPerStrip' | 'dosageForm'> & {
+      dosageForm: string;
+    },
+    existingMed?: MedicineCatalogItem
+  ) => Promise<any>;
 }
 
 const CUSTOM_PRODUCT_FORMS = [
@@ -212,6 +241,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
   onCancelEditInvoice,
   onEditTransaction,
   onDeleteTransaction,
+  onSaveMedicineCatalog,
 }) => {
   const invoiceBuilderRef = useRef<HTMLDivElement | null>(null);
   const saleCustomNameInputRef = useRef<HTMLInputElement | null>(null);
@@ -265,6 +295,29 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
   const [purPaymentMethod, setPurPaymentMethod] = useState<Transaction['paymentMethod']>('cash');
   const [syncPurPricesToCatalog, setSyncPurPricesToCatalog] = useState<boolean>(false);
   const [submittingPurchase, setSubmittingPurchase] = useState(false);
+  const [activeSearchMedId, setActiveSearchMedId] = useState<string | null>(null);
+  const [activeSearchQuery, setActiveSearchQuery] = useState<string>('');
+
+  // Auto 1st line fill / open when entering purchase tab if cart is empty
+  useEffect(() => {
+    if (entryTab === 'purchase_entry' && purchaseCart.length === 0 && !editingInvoiceTx) {
+      onAddCustomToPurchaseCart({
+        brandName: '',
+        companyName: supplierCompany,
+        strength: '',
+        dosageForm: 'Tablet',
+        purchasePrice: 0,
+        unitPrice: 0,
+        qty: 10,
+        updateStock: true,
+        packUnit: 'strip',
+        packCount: 1,
+        unitsPerPack: 10,
+        packDetailFormula: '1*10',
+        saveToCatalog: false,
+      });
+    }
+  }, [entryTab, purchaseCart.length, editingInvoiceTx]);
 
   // Daily Cashbook Filter states
   const [dateFilter, setDateFilter] = useState<string>(getTodayDateStr());
@@ -661,6 +714,267 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
     if (!previewInvoice) return [];
     return parseTransactionItemsDetailed(previewInvoice.itemsSummary);
   }, [previewInvoice]);
+
+  const updatePurchaseRowUnitAndFormula = (
+    item: PurchaseCartItem,
+    packUnit: PurchasePackUnit,
+    opts?: {
+      formulaPreset?: string;
+      customFormula?: string;
+      packCount?: number;
+      customMultiplier?: number;
+      stripsPerBox?: number;
+      pcsPerStrip?: number;
+      packRate?: number;
+      purchasePrice?: number;
+    }
+  ): Partial<PurchaseCartItem> => {
+    const count = Math.max(1, opts?.packCount !== undefined ? opts.packCount : item.packCount || 1);
+    let unitsPerPack = item.unitsPerPack || 10;
+    let packDetailFormula = item.packDetailFormula || '';
+    let stripsPerBox = opts?.stripsPerBox || item.stripsPerBox || 51;
+    let pcsPerStrip = opts?.pcsPerStrip || item.pcsPerStrip || 10;
+
+    if (packUnit === 'strip') {
+      if (opts?.formulaPreset === '1*10' || (!opts?.formulaPreset && !opts?.customFormula && (!packDetailFormula || !packDetailFormula.startsWith('1*')))) {
+        unitsPerPack = 10;
+        packDetailFormula = '1*10';
+      } else if (opts?.formulaPreset === '1*28') {
+        unitsPerPack = 28;
+        packDetailFormula = '1*28';
+      } else if (opts?.formulaPreset === '1*20') {
+        unitsPerPack = 20;
+        packDetailFormula = '1*20';
+      } else if (opts?.formulaPreset === '1*15') {
+        unitsPerPack = 15;
+        packDetailFormula = '1*15';
+      } else if (opts?.customMultiplier) {
+        unitsPerPack = opts.customMultiplier;
+        packDetailFormula = `1*${opts.customMultiplier}`;
+      } else if (opts?.customFormula) {
+        const parts = opts.customFormula.split('*').map((p) => parseInt(p.trim(), 10)).filter((n) => !isNaN(n) && n > 0);
+        if (parts.length >= 2) {
+          unitsPerPack = parts.reduce((a, b) => a * b, 1);
+          packDetailFormula = opts.customFormula.trim();
+        } else if (parts.length === 1) {
+          unitsPerPack = parts[0];
+          packDetailFormula = `1*${parts[0]}`;
+        }
+      } else if (!packDetailFormula || !packDetailFormula.startsWith('1*')) {
+        unitsPerPack = 10;
+        packDetailFormula = '1*10';
+      }
+    } else if (packUnit === 'box') {
+      if (opts?.formulaPreset === '1*10*51' || (!opts?.formulaPreset && !opts?.customFormula && (!packDetailFormula || !packDetailFormula.includes('*')))) {
+        stripsPerBox = 51;
+        pcsPerStrip = 10;
+        unitsPerPack = 510;
+        packDetailFormula = '1*10*51';
+      } else if (opts?.formulaPreset === '1*10*10') {
+        stripsPerBox = 10;
+        pcsPerStrip = 10;
+        unitsPerPack = 100;
+        packDetailFormula = '1*10*10';
+      } else if (opts?.formulaPreset === '1*28*20') {
+        stripsPerBox = 20;
+        pcsPerStrip = 28;
+        unitsPerPack = 560;
+        packDetailFormula = '1*28*20';
+      } else if (opts?.customFormula) {
+        const parts = opts.customFormula.split('*').map((p) => parseInt(p.trim(), 10)).filter((n) => !isNaN(n) && n > 0);
+        if (parts.length >= 3) {
+          pcsPerStrip = parts[1];
+          stripsPerBox = parts[2];
+          unitsPerPack = parts.reduce((a, b) => a * b, 1);
+          packDetailFormula = opts.customFormula.trim();
+        } else if (parts.length === 2) {
+          unitsPerPack = parts.reduce((a, b) => a * b, 1);
+          packDetailFormula = opts.customFormula.trim();
+        } else if (parts.length === 1) {
+          unitsPerPack = parts[0];
+          packDetailFormula = `${parts[0]} পিস`;
+        }
+      } else if (opts?.stripsPerBox || opts?.pcsPerStrip) {
+        stripsPerBox = opts.stripsPerBox || stripsPerBox;
+        pcsPerStrip = opts.pcsPerStrip || pcsPerStrip;
+        unitsPerPack = stripsPerBox * pcsPerStrip;
+        packDetailFormula = `1*${pcsPerStrip}*${stripsPerBox}`;
+      }
+    } else if (packUnit === 'cartoon') {
+      if (opts?.formulaPreset === '1*48' || (!opts?.formulaPreset && !opts?.customFormula && (!packDetailFormula || !packDetailFormula.startsWith('1*')))) {
+        unitsPerPack = 48;
+        packDetailFormula = '1*48';
+      } else if (opts?.formulaPreset === '1*24') {
+        unitsPerPack = 24;
+        packDetailFormula = '1*24';
+      } else if (opts?.customFormula) {
+        const parts = opts.customFormula.split('*').map((p) => parseInt(p.trim(), 10)).filter((n) => !isNaN(n) && n > 0);
+        if (parts.length >= 2) {
+          unitsPerPack = parts.reduce((a, b) => a * b, 1);
+          packDetailFormula = opts.customFormula.trim();
+        } else if (parts.length === 1) {
+          unitsPerPack = parts[0];
+          packDetailFormula = `1*${parts[0]}`;
+        }
+      } else if (opts?.customMultiplier) {
+        unitsPerPack = opts.customMultiplier;
+        packDetailFormula = `1*${opts.customMultiplier}`;
+      }
+    } else {
+      unitsPerPack = 1;
+      packDetailFormula = '১ পিস';
+    }
+
+    const totalQty = packUnit === 'piece' ? count : count * unitsPerPack;
+
+    let finalPurPrice = item.purchasePrice;
+    let finalPackRate = item.packRate || 0;
+
+    if (opts?.packRate !== undefined) {
+      finalPackRate = opts.packRate;
+      finalPurPrice = packUnit === 'piece' ? opts.packRate : Number((opts.packRate / unitsPerPack).toFixed(2));
+    } else if (opts?.purchasePrice !== undefined) {
+      finalPurPrice = opts.purchasePrice;
+      finalPackRate = packUnit === 'piece' ? opts.purchasePrice : Number((opts.purchasePrice * unitsPerPack).toFixed(2));
+    } else if (finalPurPrice > 0) {
+      finalPackRate = packUnit === 'piece' ? finalPurPrice : Number((finalPurPrice * unitsPerPack).toFixed(2));
+    }
+
+    return {
+      packUnit,
+      packCount: count,
+      unitsPerPack,
+      packDetailFormula,
+      stripsPerBox,
+      pcsPerStrip,
+      qty: Math.max(1, totalQty),
+      purchasePrice: Math.max(0.01, finalPurPrice),
+      packRate: finalPackRate,
+    };
+  };
+
+  const ensureNextPurchaseBoxOpen = (idx: number) => {
+    if (idx === purchaseCart.length - 1) {
+      const hasEmptyAtEnd = purchaseCart.length > 0 && !purchaseCart[purchaseCart.length - 1].brandName.trim();
+      if (!hasEmptyAtEnd) {
+        onAddCustomToPurchaseCart({
+          brandName: '',
+          companyName: supplierCompany,
+          strength: '',
+          dosageForm: 'Tablet',
+          purchasePrice: 0,
+          unitPrice: 0,
+          qty: 10,
+          updateStock: true,
+          packUnit: 'strip',
+          packCount: 1,
+          unitsPerPack: 10,
+          packDetailFormula: '1*10',
+          saveToCatalog: false,
+        });
+      }
+    }
+  };
+
+  const handleSelectMedForRow = (rowItem: PurchaseCartItem, med: MedicineCatalogItem, idx: number) => {
+    const isSolid = ['tablet', 'capsule', 'suppository', 'sachet'].includes((med.dosageForm || '').toLowerCase());
+    const isLiquid = ['syrup', 'suspension', 'drops', 'solution', 'liquid'].includes((med.dosageForm || '').toLowerCase());
+    
+    const packUnit: PurchasePackUnit = isSolid ? 'strip' : isLiquid ? 'cartoon' : 'piece';
+    const unitsPerPack = isSolid ? (med.unitsPerStrip || 10) : isLiquid ? 48 : 1;
+    const formulaStr = isSolid ? `1*${unitsPerPack}` : isLiquid ? '1*48' : '১ পিস';
+    const estCost = typeof med.purchasePrice === 'number' && med.purchasePrice > 0
+      ? med.purchasePrice
+      : Number((med.unitPrice * 0.88).toFixed(2));
+    const packRate = packUnit === 'piece' ? estCost : Number((estCost * unitsPerPack).toFixed(2));
+
+    onUpdatePurchaseCartItemDetails(rowItem.medicineId, {
+      medicineId: med.id,
+      brandName: med.brandName,
+      strength: med.strength,
+      dosageForm: med.dosageForm,
+      companyName: med.companyName || rowItem.companyName,
+      purchasePrice: estCost,
+      unitPrice: med.unitPrice,
+      packUnit,
+      packCount: 1,
+      unitsPerPack,
+      packDetailFormula: formulaStr,
+      qty: unitsPerPack,
+      packRate,
+      updateStock: true,
+    });
+    if (med.companyName) {
+      setSupplierCompany(med.companyName);
+    }
+    setActiveSearchMedId(null);
+
+    // Auto 1st Line Fill 2nd Box Open
+    ensureNextPurchaseBoxOpen(idx);
+  };
+
+  const handleCreateManualMedForRow = (
+    rowItem: PurchaseCartItem,
+    customName: string,
+    chosenForm: string,
+    idx: number
+  ) => {
+    const isSolid = ['tablet', 'capsule', 'suppository', 'sachet'].includes(chosenForm.toLowerCase());
+    const isLiquid = ['syrup', 'suspension', 'drops', 'solution', 'liquid'].includes(chosenForm.toLowerCase());
+    const packUnit: PurchasePackUnit = isSolid ? 'strip' : isLiquid ? 'cartoon' : 'piece';
+    const unitsPerPack = isSolid ? 10 : isLiquid ? 48 : 1;
+    const formulaStr = isSolid ? '1*10' : isLiquid ? '1*48' : '১ পিস';
+
+    onUpdatePurchaseCartItemDetails(rowItem.medicineId, {
+      brandName: customName.trim(),
+      dosageForm: chosenForm,
+      packUnit,
+      packCount: 1,
+      unitsPerPack,
+      packDetailFormula: formulaStr,
+      qty: unitsPerPack,
+      updateStock: true,
+    });
+    setActiveSearchMedId(null);
+
+    // Save newly created medicine to database catalog immediately so it appears in future suggestions
+    if (onSaveMedicineCatalog && customName.trim()) {
+      onSaveMedicineCatalog({
+        brandName: customName.trim(),
+        genericName: customName.trim(),
+        companyName: supplierCompany || 'Custom / General',
+        strength: rowItem.strength || 'Standard',
+        dosageForm: chosenForm,
+        packSize: formulaStr,
+        purchasePrice: rowItem.purchasePrice || 0,
+        unitPrice: rowItem.unitPrice || (rowItem.purchasePrice ? Number((rowItem.purchasePrice * 1.15).toFixed(2)) : 5),
+        stripPrice: Number(((rowItem.unitPrice || (rowItem.purchasePrice * 1.15) || 5) * 10).toFixed(2)),
+        therapeuticClass: 'Custom Medicine',
+        indication: 'কাস্টম ওষুধ',
+      }).catch(console.error);
+    }
+
+    // Auto open 2nd box if this is last row
+    ensureNextPurchaseBoxOpen(idx);
+  };
+
+  const handleAddNewPurchaseBox = () => {
+    onAddCustomToPurchaseCart({
+      brandName: '',
+      companyName: supplierCompany,
+      strength: '',
+      dosageForm: 'Tablet',
+      purchasePrice: 0,
+      unitPrice: 0,
+      qty: 10,
+      updateStock: true,
+      packUnit: 'strip',
+      packCount: 1,
+      unitsPerPack: 10,
+      packDetailFormula: '1*10',
+      saveToCatalog: false,
+    });
+  };
 
   return (
     <div className="space-y-6">
@@ -1635,806 +1949,995 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
           </div>
         ) : (
           /* ============================================================================
-             MODE 2: PRODUCT PURCHASE INVOICE (ক্রয় ইনভয়েস — ক্রয় করলে স্টক বাড়বে)
+             MODE 2: PRODUCT PURCHASE INVOICE (বক্স আকারে ক্রয় ইনভয়েস টেবিল)
+             |No(Auto 1st Line Fill 2nd Box Open)|Name (List/Manual)|Pcs 0,1,2.../Strip 1*10,1*28,1*20,1*15/Box 1*10*10,1*28*20,..|Price (Manual/Database)
              ============================================================================ */
-          <div className="grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-slate-200">
-            {/* Left 5 Cols: Custom Product Entry + Medicine Picker for Purchase Invoice (Stock-In) */}
-            <div className="lg:col-span-5 p-5 space-y-4">
-              {/* Custom Product Quick Builder for Purchase Bill */}
-              <form
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  const name = purCustomName.trim();
-                  if (!name) {
-                    purCustomNameInputRef.current?.focus();
-                    return;
-                  }
-                  const purchasePrice = Math.max(0.01, parseFloat(purCustomCostPrice) || 8.8);
-                  const unitPrice =
-                    purCustomMrpPrice.trim() !== ''
-                      ? Math.max(0.01, parseFloat(purCustomMrpPrice) || Number((purchasePrice / 0.88).toFixed(2)))
-                      : Number((purchasePrice / 0.88).toFixed(2));
-                  const qty = Math.max(1, parseInt(purCustomQty, 10) || 10);
-
-                  await onAddCustomToPurchaseCart({
-                    brandName: name,
-                    companyName: supplierCompany,
-                    strength: purCustomStrength.trim(),
-                    dosageForm: purCustomForm,
-                    purchasePrice,
-                    unitPrice,
-                    qty,
-                    batchNo: purCustomBatchNo.trim(),
-                    saveToCatalog: purCustomSaveCatalog,
-                  });
-
-                  setPurCustomName('');
-                  setPurCustomStrength('');
-                  setPurCustomCostPrice('');
-                  setPurCustomMrpPrice('');
-                  setPurCustomQty('10');
-                  setPurCustomBatchNo('');
-                }}
-                className="p-3.5 bg-indigo-50/70 border border-indigo-200 rounded-md space-y-2.5"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <div className="text-xs font-extrabold text-indigo-950 flex items-center gap-1.5">
-                      <Plus className="w-3.5 h-3.5 text-indigo-700" />
-                      <span>কাস্টম প্রডাক্ট, দাম ও পরিমাণ দিয়ে ক্রয় বিল তৈরি</span>
-                    </div>
-                    <p className="text-[11px] text-indigo-800">
-                      লিস্টে না থাকা যেকোনো ওষুধ বা কাস্টম পণ্যের নাম, ক্রয় দর, বিক্রয় MRP ও পরিমাণ লিখে সরাসরি ক্রয় বিলে যুক্ত করুন
-                    </p>
+          <div className="p-4 sm:p-5 space-y-4 bg-indigo-50/20">
+            {/* Top Bar: Supplier & Invoice Header Details */}
+            <div className="bg-white p-4 rounded-lg border border-indigo-200 shadow-xs space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 bg-indigo-100 text-indigo-800 rounded-md">
+                    <Truck className="w-4 h-4" />
                   </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-                  <div className="sm:col-span-5">
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                      প্রডাক্ট / ওষুধের নাম *
-                    </label>
-                    <input
-                      ref={purCustomNameInputRef}
-                      type="text"
-                      required
-                      value={purCustomName}
-                      onChange={(e) => setPurCustomName(e.target.value)}
-                      placeholder="যেমন: নতুন ওষুধ / কাস্টম পণ্য..."
-                      className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded focus:border-indigo-600 focus:outline-none"
-                    />
-                  </div>
-                  <div className="sm:col-span-4">
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                      ধরন / ফর্ম
-                    </label>
-                    <select
-                      value={purCustomForm}
-                      onChange={(e) => setPurCustomForm(e.target.value)}
-                      aria-label="কাস্টম প্রডাক্টের ধরন"
-                      className="w-full px-2 py-1.5 text-xs bg-white border border-slate-200 rounded focus:border-indigo-600 focus:outline-none"
-                    >
-                      {CUSTOM_PRODUCT_FORMS.map((f) => (
-                        <option key={f.value} value={f.value}>
-                          {f.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="sm:col-span-3">
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                      শক্তি / সাইজ
-                    </label>
-                    <input
-                      type="text"
-                      value={purCustomStrength}
-                      onChange={(e) => setPurCustomStrength(e.target.value)}
-                      placeholder="500mg / 100ml"
-                      className="w-full px-2 py-1.5 text-xs bg-white border border-slate-200 rounded font-mono focus:border-indigo-600 focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-4 gap-2">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                      ক্রয় দর (৳) *
-                    </label>
-                    <input
-                      ref={purCustomCostInputRef}
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      required
-                      value={purCustomCostPrice}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setPurCustomCostPrice(val);
-                        const num = parseFloat(val);
-                        if (Number.isFinite(num) && num > 0) {
-                          setPurCustomMrpPrice(String(Number((num / 0.88).toFixed(2))));
-                        }
-                      }}
-                      placeholder="8.80"
-                      className="w-full px-2 py-1.5 text-xs font-mono bg-white border border-slate-200 rounded focus:border-indigo-600 focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                      বিক্রয় MRP (৳)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      value={purCustomMrpPrice}
-                      onChange={(e) => setPurCustomMrpPrice(e.target.value)}
-                      placeholder="10.00"
-                      className="w-full px-2 py-1.5 text-xs font-mono bg-white border border-slate-200 rounded focus:border-indigo-600 focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                      পরিমাণ (পিস) *
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      step="1"
-                      required
-                      value={purCustomQty}
-                      onChange={(e) => setPurCustomQty(e.target.value)}
-                      className="w-full px-2 py-1.5 text-xs font-mono bg-white border border-slate-200 rounded focus:border-indigo-600 focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                      ব্যাচ নং
-                    </label>
-                    <input
-                      type="text"
-                      value={purCustomBatchNo}
-                      onChange={(e) => setPurCustomBatchNo(e.target.value)}
-                      placeholder="B-101"
-                      className="w-full px-2 py-1.5 text-xs font-mono bg-white border border-slate-200 rounded focus:border-indigo-600 focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
-                  <label className="inline-flex items-center gap-1.5 text-[11px] text-indigo-950 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={purCustomSaveCatalog}
-                      onChange={(e) => setPurCustomSaveCatalog(e.target.checked)}
-                      className="rounded border-indigo-400 text-indigo-700"
-                    />
-                    <span>ক্যাটালগেও স্থায়ীভাবে সংরক্ষণ করুন</span>
-                  </label>
-
-                  <button
-                    type="submit"
-                    className="px-3.5 py-1.5 text-xs font-bold text-white bg-indigo-700 hover:bg-indigo-800 rounded flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>+ ক্রয় বিলে কাস্টম প্রডাক্ট যুক্ত করুন</span>
-                  </button>
-                </div>
-              </form>
-
-              <div className="flex items-center justify-between pt-1">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900">
-                    অথবা ক্যাটালগ থেকে ক্রয়ের ওষুধ নির্বাচন করুন
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    ওষুধ সিলেক্ট করলে ক্রয় ইনভয়েসে যুক্ত হবে এবং সম্পন্ন করলে স্টক বৃদ্ধি পাবে
-                  </p>
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <div className="relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={purMedSearch}
-                    onChange={(e) => setPurMedSearch(e.target.value)}
-                    placeholder="ক্রয়ের ওষুধ সার্চ করুন (যেমন: Napa, Seclo, Sergel, Noret)..."
-                    className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-md focus:bg-white focus:border-indigo-600 focus:outline-none"
-                  />
-                </div>
-                {purMedSearch.trim() && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPurCustomName(purMedSearch.trim());
-                      purCustomCostInputRef.current?.focus();
-                    }}
-                    className="w-full py-1.5 px-3 text-xs font-semibold text-indigo-950 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded flex items-center justify-between cursor-pointer"
-                  >
-                    <span>
-                      &ldquo;{purMedSearch.trim()}&rdquo; কাস্টম প্রডাক্ট হিসেবে দাম ও পরিমাণ বসিয়ে ক্রয় বিলে যুক্ত করুন
-                    </span>
-                    <span className="font-bold text-indigo-700">+ কাস্টম যোগ →</span>
-                  </button>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-[340px] overflow-y-auto pr-1">
-                {quickSearchPurchaseMedicines.map((med) => {
-                  const st = getStockForMed(med);
-                  const inPurCart =
-                    purchaseCart.find((c) => c.medicineId === med.id)?.qty || 0;
-                  const afterPurchaseStock = st + inPurCart;
-                  const estCost = getMedPurchasePrice(med);
-                  return (
-                    <div
-                      key={med.id}
-                      className="p-3 border border-slate-200 rounded-md hover:border-indigo-600 transition-colors flex flex-col justify-between gap-2 bg-white"
-                    >
-                      <div>
-                        <div className="flex items-start justify-between gap-2">
-                          <span className="font-semibold text-sm text-slate-900">
-                            {med.brandName}{' '}
-                            <span className="text-xs font-normal text-slate-500">
-                              {med.strength}
-                            </span>
-                          </span>
-                          <span className="font-mono tabular-nums text-xs font-bold text-indigo-700">
-                            ক্রয়: ৳{formatCleanMoney(estCost)}
-                          </span>
-                        </div>
-                        <div className="text-xs text-slate-500 truncate mt-0.5 flex items-center justify-between">
-                          <span>{med.dosageForm}</span>
-                          <span className="font-mono text-[11px] font-semibold text-teal-700">
-                            বিক্রয়: ৳{formatCleanMoney(med.unitPrice)}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-                        <div className="text-xs font-mono tabular-nums text-slate-600">
-                          স্টক: {st} পিস
-                          {inPurCart > 0 && (
-                            <span className="text-emerald-700 font-bold ml-1">
-                              (হবে {afterPurchaseStock})
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onAddToPurchaseCart(med, med.unitsPerStrip || 10);
-                              setSupplierCompany(med.companyName);
-                            }}
-                            className="px-2 py-1 text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-800 rounded cursor-pointer"
-                          >
-                            +{med.unitsPerStrip || 10} পিস
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onAddToPurchaseCart(med, 100);
-                              setSupplierCompany(med.companyName);
-                            }}
-                            className="px-2 py-1 text-xs font-medium bg-indigo-700 hover:bg-indigo-800 text-white rounded cursor-pointer"
-                          >
-                            +১০০ পিস
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Right 7 Cols: Active Purchase Invoice Memo with Stock Increase Indicator */}
-            <div className="lg:col-span-7 p-5 bg-indigo-50/20 flex flex-col justify-between">
-              <div>
-                <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200">
                   <div>
                     <h3 className="text-sm font-bold text-indigo-950">
-                      ২. প্রডাক্ট ক্রয় ইনভয়েস ও স্টক-ইন ভাউচার (Purchase Invoice — স্টক বাড়বে)
+                      ২. প্রডাক্ট ক্রয় ইনভয়েস ও চালান এন্ট্রি (বক্স আকারে তালিকা)
                     </h3>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      অপারেটর: <strong>{formatOperatorDisplay(activeStaff)}</strong> · ক্রয় তালিকায় প্রডাক্টের নাম, ধরন, শক্তি, ক্রয় দর, বিক্রয় MRP ও পরিমাণ সরাসরি পরিবর্তন করা যাবে
+                    <p className="text-xs text-slate-500">
+                      অপারেটর: <strong>{formatOperatorDisplay(activeStaff)}</strong> · ক্রয় ইনভয়েসে বিক্রয় মূল্য দেখাবে না, শুধুমাত্র ক্রয় দর ও প্যাক হিসাব সংরক্ষিত হবে
                     </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onAddCustomToPurchaseCart({
-                          brandName: 'কাস্টম প্রডাক্ট',
-                          companyName: supplierCompany,
-                          strength: '',
-                          dosageForm: 'Tablet',
-                          purchasePrice: 8.8,
-                          unitPrice: 10,
-                          qty: 10,
-                          saveToCatalog: false,
-                        });
-                      }}
-                      className="px-2.5 py-1 text-xs font-semibold text-indigo-950 bg-indigo-100 hover:bg-indigo-200 border border-indigo-300 rounded cursor-pointer"
-                    >
-                      + নতুন কাস্টম লাইন যোগ
-                    </button>
-                    {purchaseCart.length > 0 && (
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            purchaseCart.forEach((item) => {
-                              onUpdatePurchaseCartItemDetails(item.medicineId, { updateStock: true });
-                            });
-                          }}
-                          className="px-2 py-0.5 text-[11px] font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded cursor-pointer"
-                        >
-                          সবগুলোতে ✅ স্টকে যুক্ত
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            purchaseCart.forEach((item) => {
-                              onUpdatePurchaseCartItemDetails(item.medicineId, { updateStock: false });
-                            });
-                          }}
-                          className="px-2 py-0.5 text-[11px] font-medium text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded cursor-pointer"
-                        >
-                          সবগুলো শুধু ইনভয়েস
-                        </button>
-                        <button
-                          type="button"
-                          onClick={onClearPurchaseCart}
-                          className="text-xs text-red-600 hover:underline cursor-pointer ml-1"
-                        >
-                          ক্রয় তালিকা খালি করুন
-                        </button>
-                      </div>
-                    )}
                   </div>
                 </div>
 
-                {/* Purchase Cart Items Table */}
-                <div className="my-3 max-h-[290px] overflow-y-auto border border-slate-200 rounded-md bg-white">
-                  {purchaseCart.length === 0 ? (
-                    <div className="py-10 px-4 text-center text-xs text-slate-500 space-y-2">
-                      <div>
-                        ক্রয় ইনভয়েসে এখনো কোনো ওষুধ বা কাস্টম প্রডাক্ট যোগ করা হয়নি।
-                      </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleAddNewPurchaseBox}
+                    className="px-3 py-1.5 text-xs font-bold text-white bg-indigo-700 hover:bg-indigo-800 rounded-md flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    + নতুন বক্স / লাইন যোগ করুন
+                  </button>
+                  {purchaseCart.length > 0 && (
+                    <>
                       <button
                         type="button"
                         onClick={() => {
-                          onAddCustomToPurchaseCart({
-                            brandName: 'কাস্টম প্রডাক্ট',
-                            companyName: supplierCompany,
-                            strength: '',
-                            dosageForm: 'Tablet',
-                            purchasePrice: 8.8,
-                            unitPrice: 10,
-                            qty: 10,
-                            saveToCatalog: false,
+                          purchaseCart.forEach((item) => {
+                            onUpdatePurchaseCartItemDetails(item.medicineId, { updateStock: true });
                           });
                         }}
-                        className="px-3 py-1.5 text-xs font-bold text-white bg-indigo-700 hover:bg-indigo-800 rounded cursor-pointer"
+                        className="px-2.5 py-1 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded cursor-pointer transition-colors"
                       >
-                        + সরাসরি কাস্টম প্রডাক্ট লাইন যোগ করুন
+                        সবগুলোতে ✅ স্টকে যুক্ত
                       </button>
-                    </div>
-                  ) : (
-                    <table className="w-full text-left border-collapse">
-                      <thead className="bg-indigo-50/70 border-b border-slate-200 text-xs font-semibold text-slate-700">
-                        <tr>
-                          <th className="py-2 px-3">প্রডাক্ট / ওষুধের নাম, ধরন ও স্টক বৃদ্ধি</th>
-                          <th className="py-2 px-2 text-center">ক্রয় দর (৳)</th>
-                          <th className="py-2 px-2 text-center">বিক্রয় MRP (৳)</th>
-                          <th className="py-2 px-2 text-center">ক্রয় পরিমাণ (পিস)</th>
-                          <th className="py-2 px-3 text-right">মোট (৳)</th>
-                          <th className="py-2 px-2 text-right"></th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200 text-sm">
-                        {purchaseCart.map((item, idx) => {
-                          const lineTotal = item.purchasePrice * item.qty;
-                          const rawCurrentStock = getStockForMed(item);
-                          const oldPurQty = isEditingPurchase ? getOldEditedQtyForMed(item) : 0;
-                          const currentStock = Math.max(0, rawCurrentStock - oldPurQty);
-                          const afterStock = currentStock + item.qty;
-                          return (
-                            <tr key={item.medicineId}>
-                              <td className="py-2 px-3">
-                                <div className="flex flex-wrap items-center gap-1">
-                                  <span className="font-mono text-xs font-bold text-slate-500">
-                                    {idx + 1}.
-                                  </span>
-                                  <select
-                                    value={item.dosageForm || 'Tablet'}
-                                    onChange={(e) =>
-                                      onUpdatePurchaseCartItemDetails(item.medicineId, {
-                                        dosageForm: e.target.value,
-                                      })
-                                    }
-                                    aria-label="প্রডাক্ট ফর্ম"
-                                    className="px-1 py-0.5 text-[11px] font-mono bg-slate-50 border border-slate-200 rounded text-slate-700"
-                                  >
-                                    {CUSTOM_PRODUCT_FORMS.map((f) => (
-                                      <option key={f.value} value={f.value}>
-                                        {getInvoiceFormPrefix(f.value)}
-                                      </option>
-                                    ))}
-                                  </select>
-                                  <input
-                                    type="text"
-                                    value={item.brandName}
-                                    onChange={(e) =>
-                                      onUpdatePurchaseCartItemDetails(item.medicineId, {
-                                        brandName: e.target.value,
-                                      })
-                                    }
-                                    placeholder="প্রডাক্টের নাম"
-                                    aria-label="প্রডাক্টের নাম"
-                                    className="w-32 sm:w-36 px-1.5 py-0.5 text-xs font-semibold text-slate-900 bg-white border border-slate-200 rounded focus:border-indigo-600 focus:outline-none"
-                                  />
-                                  <input
-                                    type="text"
-                                    value={item.strength}
-                                    onChange={(e) =>
-                                      onUpdatePurchaseCartItemDetails(item.medicineId, {
-                                        strength: e.target.value,
-                                      })
-                                    }
-                                    placeholder="শক্তি/সাইজ"
-                                    aria-label="শক্তি বা সাইজ"
-                                    className="w-20 px-1.5 py-0.5 text-[11px] font-mono text-slate-600 bg-white border border-slate-200 rounded focus:border-indigo-600 focus:outline-none"
-                                  />
-                                </div>
-                                <div className="text-[11px] font-mono text-indigo-800 mt-1">
-                                  (৳{formatCleanMoney(item.purchasePrice)}) × {item.qty}=
-                                  {formatCleanMoney(lineTotal)}
-                                </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          purchaseCart.forEach((item) => {
+                            onUpdatePurchaseCartItemDetails(item.medicineId, { updateStock: false });
+                          });
+                        }}
+                        className="px-2.5 py-1 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded cursor-pointer transition-colors"
+                      >
+                        সবগুলো শুধু ইনভয়েস
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onClearPurchaseCart}
+                        className="text-xs text-red-600 hover:underline cursor-pointer ml-1"
+                      >
+                        খালি করুন
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
 
-                                <div className="flex flex-wrap items-center gap-2 mt-1">
-                                  <label
-                                    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs border select-none cursor-pointer transition-colors ${
-                                      item.updateStock !== false
-                                        ? 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100 font-semibold'
-                                        : 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100 font-medium'
-                                    }`}
-                                    title={
-                                      item.updateStock !== false
-                                        ? 'স্টকে যুক্ত হবে (ক্লিক করে টিক চিহ্ন তুলে দিলে স্টকে যুক্ত না হয়ে শুধু ইনভয়েস তৈরি হবে)'
-                                        : 'স্টকে যুক্ত হবে না (শুধু ইনভয়েস তৈরি হবে)'
-                                    }
-                                  >
-                                    <input
-                                      type="checkbox"
-                                      checked={item.updateStock !== false}
-                                      onChange={(e) =>
-                                        onUpdatePurchaseCartItemDetails(item.medicineId, {
-                                          updateStock: e.target.checked,
-                                        })
+              {/* Invoice Meta Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 pt-1 text-xs">
+                <div>
+                  <label className="block text-slate-600 font-semibold mb-1">
+                    সরবরাহকারী কোম্পানি *
+                  </label>
+                  <select
+                    value={supplierCompany}
+                    onChange={(e) => setSupplierCompany(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-md font-medium text-slate-800"
+                  >
+                    {BD_PHARMA_COMPANIES.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-slate-600 font-semibold mb-1">
+                    ডিপো / প্রতিনিধির মোবাইল
+                  </label>
+                  <input
+                    type="text"
+                    value={supplierPhone}
+                    onChange={(e) => setSupplierPhone(e.target.value)}
+                    placeholder="যেমন: 01712345678"
+                    className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-md font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-600 font-semibold mb-1">
+                    ক্রয় চালান / ইনভয়েস নং *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={purInvoiceNo}
+                    onChange={(e) => setPurInvoiceNo(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs font-mono font-bold bg-slate-50 border border-slate-200 rounded-md text-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-600 font-semibold mb-1">
+                    ক্রয়ের তারিখ *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={purDateStr}
+                    onChange={(e) => setPurDateStr(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 border border-slate-200 rounded-md text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-600 font-semibold mb-1">
+                    পেমেন্ট মাধ্যম *
+                  </label>
+                  <select
+                    value={purPaymentMethod}
+                    onChange={(e) =>
+                      setPurPaymentMethod(e.target.value as Transaction['paymentMethod'])
+                    }
+                    className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-md font-semibold text-slate-800"
+                  >
+                    <option value="cash">নগদ টাকা (Cash)</option>
+                    <option value="bkash">বিকাশ (bKash)</option>
+                    <option value="nagad">নগদ এমএফএস (Nagad)</option>
+                    <option value="card">ব্যাংক / চেক (Card/Bank)</option>
+                    <option value="due">কোম্পানি বাকি (Supplier Due)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* The Main Box Grid Table */}
+            <div className="border border-indigo-200 rounded-lg bg-white overflow-visible shadow-xs">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead className="bg-indigo-950 text-white font-sans text-xs">
+                    <tr>
+                      <th className="py-2.5 px-2 w-14 text-center border-r border-indigo-800/60 leading-tight">
+                        No<br />
+                        <span className="text-[9px] font-normal text-indigo-300">(Auto 1st Line Fill 2nd Box Open)</span>
+                      </th>
+                      <th className="py-2.5 px-3 min-w-[260px] border-r border-indigo-800/60">
+                        Name (List / Manual)
+                      </th>
+                      <th className="py-2.5 px-3 min-w-[360px] border-r border-indigo-800/60 leading-tight">
+                        Pcs 0,1,2... / Strip 1*10, 1*28, 1*20, 1*15 (Manual/Product Database) / Box 1*10*10, 1*28*20,.. (Manual/Product Database)
+                      </th>
+                      <th className="py-2.5 px-3 min-w-[170px] text-center border-r border-indigo-800/60">
+                        Price (Manual / Database) (৳)
+                      </th>
+                      <th className="py-2.5 px-3 w-32 text-right border-r border-indigo-800/60">
+                        লাইন মোট (৳)
+                      </th>
+                      <th className="py-2.5 px-2 w-10 text-center">
+                        ✕
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {purchaseCart.map((item, idx) => {
+                      const lineTotal = item.purchasePrice * item.qty;
+                      const rawCurrentStock = getStockForMed(item);
+                      const oldPurQty = isEditingPurchase ? getOldEditedQtyForMed(item) : 0;
+                      const currentStock = Math.max(0, rawCurrentStock - oldPurQty);
+                      const afterStock = currentStock + item.qty;
+
+                      const isSolid = ['tablet', 'capsule', 'suppository', 'sachet'].includes(
+                        (item.dosageForm || 'Tablet').toLowerCase()
+                      );
+                      const isLiquid = ['syrup', 'suspension', 'drops', 'solution', 'liquid'].includes(
+                        (item.dosageForm || '').toLowerCase()
+                      );
+                      const currentPackUnit = item.packUnit || (isSolid ? 'strip' : isLiquid ? 'cartoon' : 'piece');
+
+                      // Search matches for this specific row when active
+                      const isDropdownOpen = activeSearchMedId === item.medicineId;
+                      const query = (activeSearchQuery || item.brandName || '').trim().toLowerCase();
+                      const suggestions = query
+                        ? catalog
+                            .filter(
+                              (m) =>
+                                m.brandName.toLowerCase().includes(query) ||
+                                m.genericName.toLowerCase().includes(query)
+                            )
+                            .slice(0, 8)
+                        : catalog.slice(0, 8);
+
+                      return (
+                        <tr
+                          key={item.medicineId}
+                          className={`hover:bg-indigo-50/30 transition-colors ${
+                            idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'
+                          }`}
+                        >
+                          {/* 1. No Column (Auto 1st Line Fill 2nd Box Open) */}
+                          <td className="py-3 px-2 text-center align-top border-r border-slate-200">
+                            <span className="font-mono font-bold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-1 rounded inline-block text-[11px]">
+                              {idx + 1}
+                            </span>
+                          </td>
+
+                          {/* 2. Name Column (List / Manual) */}
+                          <td className="py-3 px-3 align-top border-r border-slate-200 relative">
+                            <div className="space-y-1.5">
+                              <div className="relative">
+                                <input
+                                  type="text"
+                                  value={item.brandName}
+                                  onFocus={() => {
+                                    setActiveSearchMedId(item.medicineId);
+                                    setActiveSearchQuery(item.brandName || '');
+                                  }}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setActiveSearchQuery(val);
+                                    setActiveSearchMedId(item.medicineId);
+                                    onUpdatePurchaseCartItemDetails(item.medicineId, {
+                                      brandName: val,
+                                    });
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      setActiveSearchMedId(null);
+                                      if (item.brandName.trim()) {
+                                        ensureNextPurchaseBoxOpen(idx);
                                       }
-                                      className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                                    />
-                                    <span className="text-[11px]">
-                                      {item.updateStock !== false
-                                        ? '✅ স্টকে যুক্ত হবে'
-                                        : '❌ স্টকে যুক্ত হবে না (শুধু ইনভয়েস)'}
-                                    </span>
-                                  </label>
-                                </div>
+                                    }
+                                  }}
+                                  onBlur={() => {
+                                    if (item.brandName.trim()) {
+                                      setTimeout(() => {
+                                        ensureNextPurchaseBoxOpen(idx);
+                                      }, 250);
+                                    }
+                                  }}
+                                  placeholder="ওষুধের নাম লিখুন বা লিস্ট থেকে সিলেক্ট করুন (যেমন: Napa, Seclo)..."
+                                  className="w-full px-2.5 py-1.5 text-xs font-bold text-slate-900 bg-white border border-slate-300 rounded focus:border-indigo-600 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                                />
 
-                                {item.updateStock !== false ? (
-                                  <div className="text-[11px] font-mono text-emerald-700 mt-0.5 flex items-center gap-1">
-                                    <ArrowUpRight className="w-3 h-3 text-emerald-600 shrink-0" />
-                                    <span>
-                                      স্টক বাড়বে: বর্তমান {currentStock} পিস → ক্রয়ের পর{' '}
-                                      <strong>{afterStock} পিস</strong> (+{item.qty})
-                                    </span>
-                                  </div>
-                                ) : (
-                                  <div className="text-[11px] font-mono text-amber-800 mt-0.5 flex items-center gap-1">
-                                    <Info className="w-3 h-3 text-amber-600 shrink-0" />
-                                    <span>
-                                      স্টক অপরিবর্তিত থাকবে (বর্তমান {currentStock} পিস) · শুধু ইনভয়েস ও মোট হিসাবে থাকবে
-                                    </span>
+                                {/* Interactive Suggestions Dropdown */}
+                                {isDropdownOpen && (
+                                  <div className="absolute left-0 top-full mt-1 w-full max-w-md bg-white border border-indigo-300 rounded-md shadow-xl z-50 overflow-hidden divide-y divide-slate-100">
+                                    <div className="p-2 bg-indigo-50 flex items-center justify-between text-[11px] font-semibold text-indigo-950">
+                                      <span>ডাটাবেস সাজেশন ও ক্যাটালগ লিস্ট:</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setActiveSearchMedId(null)}
+                                        className="text-slate-500 hover:text-slate-800 cursor-pointer"
+                                      >
+                                        ✕ বন্ধ
+                                      </button>
+                                    </div>
+
+                                    {suggestions.length > 0 ? (
+                                      <div className="max-h-56 overflow-y-auto divide-y divide-slate-100">
+                                        {suggestions.map((med) => {
+                                          const medCost =
+                                            typeof med.purchasePrice === 'number' && med.purchasePrice > 0
+                                              ? med.purchasePrice
+                                              : Number((med.unitPrice * 0.88).toFixed(2));
+                                          const medStock = getInventoryStockForMedicine(inventory, med);
+                                          return (
+                                            <button
+                                              key={med.id}
+                                              type="button"
+                                              onClick={() => handleSelectMedForRow(item, med, idx)}
+                                              className="w-full p-2 text-left hover:bg-indigo-50/70 transition-colors flex items-center justify-between gap-2 cursor-pointer"
+                                            >
+                                              <div>
+                                                <div className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                                                  <span>{med.brandName}</span>
+                                                  <span className="text-[11px] font-normal text-slate-500">
+                                                    {med.strength}
+                                                  </span>
+                                                  <span className="text-[10px] bg-slate-100 text-slate-700 px-1.5 py-0.2 rounded font-mono">
+                                                    {med.dosageForm}
+                                                  </span>
+                                                </div>
+                                                <div className="text-[11px] text-slate-500 truncate">
+                                                  {med.genericName} · {med.companyName}
+                                                </div>
+                                              </div>
+                                              <div className="text-right shrink-0">
+                                                <div className="font-mono text-xs font-bold text-indigo-700">
+                                                  ক্রয়: ৳{formatCleanMoney(medCost)}
+                                                </div>
+                                                <div className="text-[10px] font-mono text-slate-500">
+                                                  স্টক: {medStock} পিস
+                                                </div>
+                                              </div>
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    ) : (
+                                      <div className="p-3 text-xs text-slate-500 text-center">
+                                        ডাটাবেসে &ldquo;{query}&rdquo; নামে কোনো ওষুধ পাওয়া যায়নি।
+                                      </div>
+                                    )}
+
+                                    {/* Manual entry / new medicine save prompt */}
+                                    {item.brandName.trim() && (
+                                      <div className="p-2.5 bg-indigo-50/50 space-y-2 border-t border-indigo-100">
+                                        <div className="text-[11px] font-bold text-indigo-900">
+                                          ➕ &ldquo;{item.brandName.trim()}&rdquo; নতুন ওষুধ হিসেবে ডাটাবেসে সেভ করুন:
+                                        </div>
+                                        <div className="flex flex-wrap gap-1">
+                                          {[
+                                            { label: 'ট্যাবলেট', form: 'Tablet' },
+                                            { label: 'ক্যাপসুল', form: 'Capsule' },
+                                            { label: 'সিরাপ', form: 'Syrup' },
+                                            { label: 'সাপোজিটরি', form: 'Suppository' },
+                                            { label: 'স্যাশেট', form: 'Sachet' },
+                                            { label: 'ড্রপ', form: 'Drops' },
+                                            { label: 'ইনজেকশন', form: 'Injection' },
+                                            { label: 'অন্যান্য', form: 'Surgical' },
+                                          ].map((btn) => (
+                                            <button
+                                              key={btn.form}
+                                              type="button"
+                                              onClick={() =>
+                                                handleCreateManualMedForRow(
+                                                  item,
+                                                  item.brandName,
+                                                  btn.form,
+                                                  idx
+                                                )
+                                              }
+                                              className="px-2 py-0.5 text-[11px] font-semibold text-indigo-900 bg-white hover:bg-indigo-100 border border-indigo-200 rounded cursor-pointer transition-colors"
+                                            >
+                                              {btn.label} হিসেবে সেভ
+                                            </button>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
-                              </td>
+                              </div>
 
-                              {/* Editable Purchase Unit Cost */}
-                              <td className="py-2 px-1.5 text-center">
+                              {/* Form & Strength secondary fields */}
+                              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                                <select
+                                  value={item.dosageForm || 'Tablet'}
+                                  onChange={(e) => {
+                                    const nextForm = e.target.value;
+                                    const isSolidNext = ['tablet', 'capsule', 'suppository', 'sachet'].includes(
+                                      nextForm.toLowerCase()
+                                    );
+                                    const isLiquidNext = ['syrup', 'suspension', 'drops', 'solution', 'liquid'].includes(
+                                      nextForm.toLowerCase()
+                                    );
+                                    const nextPackUnit = isSolidNext ? 'strip' : isLiquidNext ? 'cartoon' : 'piece';
+                                    const updates = updatePurchaseRowUnitAndFormula(item, nextPackUnit);
+                                    onUpdatePurchaseCartItemDetails(item.medicineId, {
+                                      ...updates,
+                                      dosageForm: nextForm,
+                                    });
+                                  }}
+                                  className="px-1.5 py-0.5 text-[11px] bg-slate-50 border border-slate-200 rounded text-slate-700 font-medium"
+                                >
+                                  {CUSTOM_PRODUCT_FORMS.map((f) => (
+                                    <option key={f.value} value={f.value}>
+                                      {f.label}
+                                    </option>
+                                  ))}
+                                </select>
                                 <input
-                                  type="number"
-                                  step="0.01"
-                                  min="0.1"
-                                  aria-label={`${item.brandName} ক্রয় দর`}
-                                  value={item.purchasePrice}
+                                  type="text"
+                                  value={item.strength || ''}
                                   onChange={(e) =>
-                                    onUpdatePurchaseCartCost(
-                                      item.medicineId,
-                                      Math.max(0.01, parseFloat(e.target.value) || 0)
-                                    )
+                                    onUpdatePurchaseCartItemDetails(item.medicineId, {
+                                      strength: e.target.value,
+                                    })
                                   }
-                                  className="w-18 text-center py-1 px-1 text-xs font-mono tabular-nums border border-slate-200 rounded bg-white text-slate-900"
+                                  placeholder="শক্তি (যেমন: 500mg)"
+                                  className="w-24 px-1.5 py-0.5 text-[11px] font-mono border border-slate-200 rounded bg-white"
                                 />
-                              </td>
-
-                              {/* Editable Selling MRP */}
-                              <td className="py-2 px-1.5 text-center">
                                 <input
-                                  type="number"
-                                  step="0.01"
-                                  min="0.1"
-                                  aria-label={`${item.brandName} বিক্রয় MRP`}
-                                  value={item.unitPrice}
+                                  type="text"
+                                  value={item.batchNo || ''}
                                   onChange={(e) =>
-                                    onUpdatePurchaseCartMrp(
-                                      item.medicineId,
-                                      Math.max(0.01, parseFloat(e.target.value) || 0)
-                                    )
+                                    onUpdatePurchaseCartItemDetails(item.medicineId, {
+                                      batchNo: e.target.value,
+                                    })
                                   }
-                                  className="w-18 text-center py-1 px-1 text-xs font-mono tabular-nums border border-slate-200 rounded bg-white text-slate-900"
+                                  placeholder="ব্যাচ নং"
+                                  className="w-20 px-1.5 py-0.5 text-[11px] font-mono border border-slate-200 rounded bg-white text-slate-600"
                                 />
-                              </td>
+                              </div>
+                            </div>
+                          </td>
 
-                              {/* Purchase Qty Controls */}
-                              <td className="py-2 px-2">
-                                <div className="flex items-center justify-center gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      onUpdatePurchaseCartQty(
-                                        item.medicineId,
-                                        Math.max(1, item.qty - 10)
-                                      )
-                                    }
-                                    className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-700 cursor-pointer"
-                                    title="-১০ পিস"
-                                  >
-                                    <Minus className="w-3 h-3" />
-                                  </button>
+                          {/* 3. Pcs / Strip / Box / Cartoon (Manual/Database) */}
+                          <td className="py-3 px-3 align-top border-r border-slate-200">
+                            <div className="space-y-2">
+                              {/* Unit Buttons */}
+                              <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-0.5 rounded border border-slate-200 w-fit">
+                                {isSolid ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const updates = updatePurchaseRowUnitAndFormula(item, 'strip', {
+                                          formulaPreset: '1*10',
+                                        });
+                                        onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                      }}
+                                      className={`px-2 py-0.5 text-[11px] font-bold rounded cursor-pointer transition-colors ${
+                                        currentPackUnit === 'strip'
+                                          ? 'bg-indigo-700 text-white shadow-xs'
+                                          : 'text-slate-700 hover:text-indigo-900'
+                                      }`}
+                                    >
+                                      পাতা (Strip)
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const updates = updatePurchaseRowUnitAndFormula(item, 'box', {
+                                          formulaPreset: '1*10*51',
+                                        });
+                                        onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                      }}
+                                      className={`px-2 py-0.5 text-[11px] font-bold rounded cursor-pointer transition-colors ${
+                                        currentPackUnit === 'box'
+                                          ? 'bg-indigo-700 text-white shadow-xs'
+                                          : 'text-slate-700 hover:text-indigo-900'
+                                      }`}
+                                    >
+                                      বক্স (Box)
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const updates = updatePurchaseRowUnitAndFormula(item, 'piece');
+                                        onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                      }}
+                                      className={`px-2 py-0.5 text-[11px] font-bold rounded cursor-pointer transition-colors ${
+                                        currentPackUnit === 'piece'
+                                          ? 'bg-indigo-700 text-white shadow-xs'
+                                          : 'text-slate-700 hover:text-indigo-900'
+                                      }`}
+                                    >
+                                      পিস (Pcs)
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const updates = updatePurchaseRowUnitAndFormula(item, 'cartoon', {
+                                          formulaPreset: '1*48',
+                                        });
+                                        onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                      }}
+                                      className={`px-2 py-0.5 text-[11px] font-bold rounded cursor-pointer transition-colors ${
+                                        currentPackUnit === 'cartoon'
+                                          ? 'bg-indigo-700 text-white shadow-xs'
+                                          : 'text-slate-700 hover:text-indigo-900'
+                                      }`}
+                                    >
+                                      কার্টুন
+                                    </button>
+                                  </>
+                                ) : isLiquid ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const updates = updatePurchaseRowUnitAndFormula(item, 'piece');
+                                        onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                      }}
+                                      className={`px-2 py-0.5 text-[11px] font-bold rounded cursor-pointer transition-colors ${
+                                        currentPackUnit === 'piece'
+                                          ? 'bg-indigo-700 text-white shadow-xs'
+                                          : 'text-slate-700 hover:text-indigo-900'
+                                      }`}
+                                    >
+                                      পিস / বোতল
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const updates = updatePurchaseRowUnitAndFormula(item, 'cartoon', {
+                                          formulaPreset: '1*48',
+                                        });
+                                        onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                      }}
+                                      className={`px-2 py-0.5 text-[11px] font-bold rounded cursor-pointer transition-colors ${
+                                        currentPackUnit === 'cartoon'
+                                          ? 'bg-indigo-700 text-white shadow-xs'
+                                          : 'text-slate-700 hover:text-indigo-900'
+                                      }`}
+                                    >
+                                      কার্টুন (1*48)
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const updates = updatePurchaseRowUnitAndFormula(item, 'box', {
+                                          formulaPreset: '1*10*10',
+                                        });
+                                        onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                      }}
+                                      className={`px-2 py-0.5 text-[11px] font-bold rounded cursor-pointer transition-colors ${
+                                        currentPackUnit === 'box'
+                                          ? 'bg-indigo-700 text-white shadow-xs'
+                                          : 'text-slate-700 hover:text-indigo-900'
+                                      }`}
+                                    >
+                                      বক্স (Box)
+                                    </button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const updates = updatePurchaseRowUnitAndFormula(item, 'piece');
+                                        onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                      }}
+                                      className={`px-2 py-0.5 text-[11px] font-bold rounded cursor-pointer transition-colors ${
+                                        currentPackUnit === 'piece'
+                                          ? 'bg-indigo-700 text-white shadow-xs'
+                                          : 'text-slate-700 hover:text-indigo-900'
+                                      }`}
+                                    >
+                                      পিস (Pcs)
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const updates = updatePurchaseRowUnitAndFormula(item, 'box', {
+                                          formulaPreset: '1*10*10',
+                                        });
+                                        onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                      }}
+                                      className={`px-2 py-0.5 text-[11px] font-bold rounded cursor-pointer transition-colors ${
+                                        currentPackUnit === 'box'
+                                          ? 'bg-indigo-700 text-white shadow-xs'
+                                          : 'text-slate-700 hover:text-indigo-900'
+                                      }`}
+                                    >
+                                      বক্স (Box)
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const updates = updatePurchaseRowUnitAndFormula(item, 'cartoon', {
+                                          formulaPreset: '1*48',
+                                        });
+                                        onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                      }}
+                                      className={`px-2 py-0.5 text-[11px] font-bold rounded cursor-pointer transition-colors ${
+                                        currentPackUnit === 'cartoon'
+                                          ? 'bg-indigo-700 text-white shadow-xs'
+                                          : 'text-slate-700 hover:text-indigo-900'
+                                      }`}
+                                    >
+                                      কার্টুন
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+
+                              {/* Pack Count & Multiplier Formula Presets */}
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <div className="flex items-center gap-1">
+                                  <span className="text-[11px] font-semibold text-slate-600">
+                                    {currentPackUnit === 'strip'
+                                      ? 'পাতা সংখ্যা:'
+                                      : currentPackUnit === 'box'
+                                      ? 'বক্স সংখ্যা:'
+                                      : currentPackUnit === 'cartoon'
+                                      ? 'কার্টুন সংখ্যা:'
+                                      : 'পিস সংখ্যা:'}
+                                  </span>
                                   <input
                                     type="number"
                                     min="1"
-                                    value={item.qty}
-                                    onChange={(e) =>
-                                      onUpdatePurchaseCartQty(
-                                        item.medicineId,
-                                        Math.max(1, parseInt(e.target.value, 10) || 1)
-                                      )
-                                    }
-                                    className="w-16 text-center py-1 text-xs font-mono tabular-nums border border-slate-200 rounded"
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      onUpdatePurchaseCartQty(item.medicineId, item.qty + 10)
-                                    }
-                                    className="p-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-700 cursor-pointer"
-                                    title="+১০ পিস"
-                                  >
-                                    <Plus className="w-3 h-3" />
-                                  </button>
-                                </div>
-                                <div className="mt-1 flex items-center justify-center gap-1">
-                                  <input
-                                    type="text"
-                                    value={item.batchNo}
-                                    onChange={(e) =>
-                                      onUpdatePurchaseCartBatch(item.medicineId, e.target.value)
-                                    }
-                                    placeholder="ব্যাচ নং"
-                                    className="w-20 text-center py-0.5 px-1 text-[10px] font-mono border border-slate-200 rounded text-slate-600"
+                                    value={item.packCount || 1}
+                                    onChange={(e) => {
+                                      const nextCount = Math.max(1, parseInt(e.target.value, 10) || 1);
+                                      const updates = updatePurchaseRowUnitAndFormula(item, currentPackUnit, {
+                                        packCount: nextCount,
+                                      });
+                                      onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                    }}
+                                    className="w-14 text-center py-1 text-xs font-mono font-bold border border-slate-300 rounded bg-white"
                                   />
                                 </div>
-                              </td>
 
-                              <td className="py-2 px-3 text-right font-mono tabular-nums font-semibold text-slate-900">
-                                {formatCleanMoney(lineTotal)}
-                              </td>
+                                {/* Preset Buttons for Strip */}
+                                {currentPackUnit === 'strip' && (
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    {['1*10', '1*28', '1*20', '1*15'].map((preset) => (
+                                      <button
+                                        key={preset}
+                                        type="button"
+                                        onClick={() => {
+                                          const updates = updatePurchaseRowUnitAndFormula(item, 'strip', {
+                                            formulaPreset: preset,
+                                          });
+                                          onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                        }}
+                                        className={`px-1.5 py-0.5 text-[10px] font-mono rounded cursor-pointer border ${
+                                          item.packDetailFormula === preset
+                                            ? 'bg-indigo-100 border-indigo-400 font-bold text-indigo-950'
+                                            : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
+                                        }`}
+                                      >
+                                        {preset}
+                                      </button>
+                                    ))}
+                                    <div className="flex items-center gap-0.5 pl-0.5">
+                                      <span className="text-[10px] text-slate-500 font-mono">ম্যানুয়াল:</span>
+                                      <input
+                                        type="text"
+                                        value={item.packDetailFormula || ''}
+                                        onChange={(e) => {
+                                          const customVal = e.target.value;
+                                          const updates = updatePurchaseRowUnitAndFormula(item, 'strip', {
+                                            customFormula: customVal,
+                                          });
+                                          onUpdatePurchaseCartItemDetails(item.medicineId, {
+                                            ...updates,
+                                            packDetailFormula: customVal,
+                                          });
+                                        }}
+                                        placeholder="1*10"
+                                        className="w-14 px-1 py-0.5 text-[10px] font-mono border border-slate-300 rounded bg-white text-center"
+                                      />
+                                    </div>
+                                  </div>
+                                )}
 
-                              <td className="py-2 px-2 text-right">
-                                <button
-                                  type="button"
-                                  onClick={() => onRemoveFromPurchaseCart(item.medicineId)}
-                                  className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
+                                {/* Preset Buttons for Box */}
+                                {currentPackUnit === 'box' && (
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    {[
+                                      { label: '1*10*10 (100)', preset: '1*10*10' },
+                                      { label: '1*28*20 (560)', preset: '1*28*20' },
+                                      { label: '1*10*51 (510)', preset: '1*10*51' },
+                                    ].map((b) => (
+                                      <button
+                                        key={b.preset}
+                                        type="button"
+                                        onClick={() => {
+                                          const updates = updatePurchaseRowUnitAndFormula(item, 'box', {
+                                            formulaPreset: b.preset,
+                                          });
+                                          onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                        }}
+                                        className={`px-1.5 py-0.5 text-[10px] font-mono rounded cursor-pointer border ${
+                                          item.packDetailFormula === b.preset
+                                            ? 'bg-indigo-100 border-indigo-400 font-bold text-indigo-950'
+                                            : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
+                                        }`}
+                                      >
+                                        {b.label}
+                                      </button>
+                                    ))}
+                                    <div className="flex items-center gap-0.5 pl-0.5">
+                                      <span className="text-[10px] text-slate-500 font-mono">ম্যানুয়াল:</span>
+                                      <input
+                                        type="text"
+                                        value={item.packDetailFormula || ''}
+                                        onChange={(e) => {
+                                          const customVal = e.target.value;
+                                          const updates = updatePurchaseRowUnitAndFormula(item, 'box', {
+                                            customFormula: customVal,
+                                          });
+                                          onUpdatePurchaseCartItemDetails(item.medicineId, {
+                                            ...updates,
+                                            packDetailFormula: customVal,
+                                          });
+                                        }}
+                                        placeholder="1*10*51"
+                                        className="w-18 px-1 py-0.5 text-[10px] font-mono border border-slate-300 rounded bg-white text-center"
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Preset Buttons for Cartoon */}
+                                {currentPackUnit === 'cartoon' && (
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    {['1*48', '1*24'].map((preset) => (
+                                      <button
+                                        key={preset}
+                                        type="button"
+                                        onClick={() => {
+                                          const updates = updatePurchaseRowUnitAndFormula(item, 'cartoon', {
+                                            formulaPreset: preset,
+                                          });
+                                          onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                        }}
+                                        className={`px-1.5 py-0.5 text-[10px] font-mono rounded cursor-pointer border ${
+                                          item.packDetailFormula === preset
+                                            ? 'bg-indigo-100 border-indigo-400 font-bold text-indigo-950'
+                                            : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
+                                        }`}
+                                      >
+                                        {preset}
+                                      </button>
+                                    ))}
+                                    <div className="flex items-center gap-0.5 pl-0.5">
+                                      <span className="text-[10px] text-slate-500 font-mono">ম্যানুয়াল:</span>
+                                      <input
+                                        type="text"
+                                        value={item.packDetailFormula || ''}
+                                        onChange={(e) => {
+                                          const customVal = e.target.value;
+                                          const updates = updatePurchaseRowUnitAndFormula(item, 'cartoon', {
+                                            customFormula: customVal,
+                                          });
+                                          onUpdatePurchaseCartItemDetails(item.medicineId, {
+                                            ...updates,
+                                            packDetailFormula: customVal,
+                                          });
+                                        }}
+                                        placeholder="1*48"
+                                        className="w-14 px-1 py-0.5 text-[10px] font-mono border border-slate-300 rounded bg-white text-center"
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Live Calculation Formula Display */}
+                              <div className="text-[11px] font-mono font-semibold text-indigo-950 bg-indigo-50/80 px-2 py-0.5 rounded border border-indigo-200/60 inline-flex items-center gap-1.5">
+                                <span>হিসাব:</span>
+                                <span>
+                                  {currentPackUnit === 'strip'
+                                    ? `${item.packCount || 1} পাতা (${item.packDetailFormula || '1*10'}) = ${item.qty} পিস`
+                                    : currentPackUnit === 'box'
+                                    ? `${item.packCount || 1} বক্স (${item.packDetailFormula || '1*10*51'}) = ${item.qty} পিস`
+                                    : currentPackUnit === 'cartoon'
+                                    ? `${item.packCount || 1} কার্টুন (${item.packDetailFormula || '1*48'}) = ${item.qty} পিস`
+                                    : `${item.qty} পিস`}
+                                </span>
+                              </div>
+
+                              {/* Stock Checkbox Toggle: ✅ দিলে স্টকে যুক্ত হবে, অন্যথায় শুধু ইনভয়েস */}
+                              <div className="pt-0.5">
+                                <label
+                                  className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] border select-none cursor-pointer transition-colors ${
+                                    item.updateStock !== false
+                                      ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold hover:bg-emerald-100'
+                                      : 'bg-amber-50 border-amber-300 text-amber-900 font-semibold hover:bg-amber-100'
+                                  }`}
+                                  title={
+                                    item.updateStock !== false
+                                      ? '✅ স্টকে যুক্ত হবে (ক্লিক করে টিক তুলে দিলে স্টক বাড়বে না, শুধু ইনভয়েস তৈরি হবে)'
+                                      : '❌ স্টকে যুক্ত হবে না (শুধু ইনভয়েস তৈরি হবে)'
+                                  }
                                 >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
+                                  <input
+                                    type="checkbox"
+                                    checked={item.updateStock !== false}
+                                    onChange={(e) =>
+                                      onUpdatePurchaseCartItemDetails(item.medicineId, {
+                                        updateStock: e.target.checked,
+                                      })
+                                    }
+                                    className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                                  />
+                                  <span>
+                                    {item.updateStock !== false
+                                      ? `✅ স্টকে যুক্ত হবে (স্টক বাড়বে: ${currentStock} → ${afterStock})`
+                                      : '❌ স্টকে যুক্ত হবে না (শুধু ইনভয়েস বিল)'}
+                                  </span>
+                                </label>
+                              </div>
+                            </div>
+                          </td>
 
-                {purchaseCart.length > 0 && (
-                  <div className="mb-3 p-2.5 bg-white border border-indigo-200 rounded-md text-xs font-mono text-slate-800 space-y-0.5">
-                    <div className="text-[11px] font-sans font-semibold text-indigo-900 mb-1 flex items-center justify-between">
-                      <span>ক্রয় ইনভয়েস প্রিভিউ (Purchase Invoice Lines):</span>
-                      <span className="text-emerald-700 font-bold">
-                        মোট স্টক বৃদ্ধি: +{totalPurchaseUnits} পিস
-                      </span>
-                    </div>
-                    {purchaseCart.map((item, idx) => (
-                      <div key={item.medicineId}>{formatPurchaseItemInvoiceLine(item, idx)}</div>
-                    ))}
-                  </div>
-                )}
+                          {/* 4. Price Column (Manual / Database) - NO SELLING PRICE! */}
+                          <td className="py-3 px-3 align-top border-r border-slate-200">
+                            <div className="space-y-1.5 text-center">
+                              {currentPackUnit !== 'piece' ? (
+                                <div>
+                                  <label className="block text-[10px] text-slate-500 font-semibold mb-0.5">
+                                    প্রতি {currentPackUnit === 'strip' ? 'পাতা' : currentPackUnit === 'box' ? 'বক্স' : 'কার্টুন'} দর (৳):
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0.01"
+                                    value={item.packRate || ''}
+                                    onChange={(e) => {
+                                      const nextRate = parseFloat(e.target.value) || 0;
+                                      const updates = updatePurchaseRowUnitAndFormula(item, currentPackUnit, {
+                                        packRate: nextRate,
+                                      });
+                                      onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                    }}
+                                    placeholder="প্যাক দর"
+                                    className="w-24 text-center py-1 px-1.5 text-xs font-mono font-bold tabular-nums border border-slate-300 rounded bg-white text-slate-900 mx-auto"
+                                  />
+                                  <div className="text-[10px] font-mono text-indigo-700 mt-0.5">
+                                    (পিস দর ৳{formatCleanMoney(item.purchasePrice)})
+                                  </div>
+                                </div>
+                              ) : (
+                                <div>
+                                  <label className="block text-[10px] text-slate-500 font-semibold mb-0.5">
+                                    প্রতি পিস ক্রয় দর (৳):
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0.01"
+                                    value={item.purchasePrice || ''}
+                                    onChange={(e) => {
+                                      const nextPrice = parseFloat(e.target.value) || 0;
+                                      const updates = updatePurchaseRowUnitAndFormula(item, 'piece', {
+                                        purchasePrice: nextPrice,
+                                      });
+                                      onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                    }}
+                                    placeholder="পিস দর"
+                                    className="w-24 text-center py-1 px-1.5 text-xs font-mono font-bold tabular-nums border border-slate-300 rounded bg-white text-slate-900 mx-auto"
+                                  />
+                                </div>
+                              )}
+
+                              {/* Direct piece price override */}
+                              <div className="pt-0.5 flex items-center justify-center gap-1">
+                                <span className="text-[10px] text-slate-500">পিস দর:</span>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0.01"
+                                  value={item.purchasePrice || ''}
+                                  onChange={(e) => {
+                                    const nextPrice = parseFloat(e.target.value) || 0;
+                                    const updates = updatePurchaseRowUnitAndFormula(item, currentPackUnit, {
+                                      purchasePrice: nextPrice,
+                                    });
+                                    onUpdatePurchaseCartItemDetails(item.medicineId, updates);
+                                  }}
+                                  className="w-18 text-center py-0.5 px-1 text-[10px] font-mono border border-slate-200 rounded bg-white text-slate-700"
+                                />
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* 5. Line Total (৳) */}
+                          <td className="py-3 px-3 align-top border-r border-slate-200 text-right">
+                            <div className="font-mono font-bold text-sm text-indigo-950 tabular-nums pt-1">
+                              ৳{formatCleanMoney(lineTotal)}
+                            </div>
+                            <div className="text-[10px] font-mono text-slate-500 mt-0.5">
+                              {item.qty} পিস × ৳{formatCleanMoney(item.purchasePrice)}
+                            </div>
+                          </td>
+
+                          {/* 6. Remove Column */}
+                          <td className="py-3 px-2 align-top text-center">
+                            <button
+                              type="button"
+                              onClick={() => onRemoveFromPurchaseCart(item.medicineId)}
+                              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer"
+                              title="লাইন মুছুন"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
 
-              {/* Supplier Company & Purchase Payment Form */}
-              <form
-                onSubmit={handlePurchaseInvoiceSubmit}
-                className="space-y-3 pt-2 border-t border-slate-200"
-              >
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">
-                      সরবরাহকারী কোম্পানি সার্চ ও নির্বাচন
-                    </label>
-                    <input
-                      type="text"
-                      value={purCompanySearch}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setPurCompanySearch(val);
-                        const q = val.trim().toLowerCase();
-                        if (q) {
-                          const firstComp = BD_PHARMA_COMPANIES.find((c) =>
-                            c.toLowerCase().includes(q)
-                          );
-                          if (firstComp) setSupplierCompany(firstComp);
-                        }
-                      }}
-                      placeholder="কোম্পানি সার্চ করুন..."
-                      className="w-full px-2.5 py-1 text-xs bg-white border border-slate-200 rounded-md mb-1"
-                    />
-                    <select
-                      value={supplierCompany}
-                      onChange={(e) => setSupplierCompany(e.target.value)}
-                      className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-md"
-                    >
-                      {filteredPurchaseCompanies.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+              {/* Bottom Action inside Table Box */}
+              <div className="p-3 bg-slate-50/80 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={handleAddNewPurchaseBox}
+                  className="px-3.5 py-1.5 text-xs font-bold text-indigo-950 bg-white hover:bg-indigo-50 border border-indigo-300 rounded-md shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5 text-indigo-700" />
+                  <span>+ পরবর্তী বক্স / নতুন লাইন খুলুন (Auto / Add Box)</span>
+                </button>
 
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">
-                      ক্রয় ইনভয়েস / চালান নং *
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={purInvoiceNo}
-                      onChange={(e) => setPurInvoiceNo(e.target.value)}
-                      className="w-full px-3 py-1.5 text-xs font-mono bg-white border border-slate-200 rounded-md"
-                    />
-                    <input
-                      type="text"
-                      value={supplierPhone}
-                      onChange={(e) => setSupplierPhone(e.target.value)}
-                      placeholder="ডিপো / প্রতিনিধির মোবাইল"
-                      className="w-full mt-1 px-3 py-1 text-xs bg-white border border-slate-200 rounded-md"
-                    />
-                  </div>
+                <div className="text-xs font-mono text-slate-600">
+                  মোট <strong>{purchaseCart.filter((i) => i.brandName.trim()).length}</strong>টি ওষুধ · মোট পরিমাণ: <strong>{totalPurchaseUnits} পিস</strong>
+                </div>
+              </div>
+            </div>
 
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">
-                      তারিখ ও পেমেন্ট মাধ্যম
-                    </label>
-                    <input
-                      type="date"
-                      required
-                      value={purDateStr}
-                      onChange={(e) => setPurDateStr(e.target.value)}
-                      aria-label="ক্রয় ইনভয়েস তারিখ"
-                      className="w-full px-2.5 py-1 text-xs font-mono bg-white border border-slate-200 rounded-md mb-1"
-                    />
-                    <select
-                      value={purPaymentMethod}
-                      onChange={(e) =>
-                        setPurPaymentMethod(e.target.value as Transaction['paymentMethod'])
-                      }
-                      className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-md"
-                    >
-                      <option value="cash">নগদ টাকা (Cash)</option>
-                      <option value="bkash">বিকাশ (bKash)</option>
-                      <option value="nagad">নগদ এমএফএস (Nagad)</option>
-                      <option value="card">ব্যাংক / চেক (Card/Bank)</option>
-                      <option value="due">কোম্পানি বাকি (Supplier Due)</option>
-                    </select>
+            {/* Bottom Financial Totals & Invoice Checkout Form */}
+            <form
+              onSubmit={handlePurchaseInvoiceSubmit}
+              className="bg-white p-4 rounded-lg border border-indigo-200 shadow-xs space-y-3"
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-indigo-50/40 p-3 rounded-md border border-indigo-100">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600">মোট ক্রয় বিল (SubTotal ৳)</label>
+                  <div className="text-lg font-extrabold font-mono tabular-nums text-slate-900 mt-0.5">
+                    ৳{purchaseSubTotal.toFixed(2)}
                   </div>
                 </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600">কমিশন / ডিসকাউন্ট (৳)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={purDiscountStr}
+                    onChange={(e) => setPurDiscountStr(e.target.value)}
+                    placeholder="0"
+                    className="w-full mt-1 px-2.5 py-1 text-xs font-mono tabular-nums border border-slate-300 rounded bg-white text-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600">নগদ পরিশোধ (Paid ৳)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder={purGrandTotal.toFixed(0)}
+                    value={purPaidStr}
+                    onChange={(e) => setPurPaidStr(e.target.value)}
+                    className="w-full mt-1 px-2.5 py-1 text-xs font-mono tabular-nums border border-slate-300 rounded bg-white text-slate-900"
+                  />
+                </div>
+              </div>
 
-                <div className="grid grid-cols-3 gap-3 bg-white p-3 rounded-md border border-slate-200">
-                  <div>
-                    <label className="block text-xs text-slate-500">মোট ক্রয় বিল (৳)</label>
-                    <div className="text-base font-bold font-mono tabular-nums text-slate-900 mt-0.5">
-                      ৳{purchaseSubTotal.toFixed(2)}
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-500">কমিশন / ছাড় (৳)</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={purDiscountStr}
-                      onChange={(e) => setPurDiscountStr(e.target.value)}
-                      className="w-full mt-0.5 px-2 py-1 text-xs font-mono tabular-nums border border-slate-200 rounded"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-500">নগদ পরিশোধ (৳)</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      placeholder={purGrandTotal.toFixed(0)}
-                      value={purPaidStr}
-                      onChange={(e) => setPurPaidStr(e.target.value)}
-                      className="w-full mt-0.5 px-2 py-1 text-xs font-mono tabular-nums border border-slate-200 rounded"
-                    />
-                  </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                <div className="text-xs space-x-3 font-mono tabular-nums">
+                  <span className="text-slate-700 font-semibold">
+                    নিট ক্রয় বিল:{' '}
+                    <strong className="text-slate-950 text-sm">৳{purGrandTotal.toFixed(2)}</strong>
+                  </span>
+                  <span
+                    className={purDueAmount > 0 ? 'text-red-600 font-bold' : 'text-emerald-700 font-semibold'}
+                  >
+                    কোম্পানি বাকি: ৳{purDueAmount.toFixed(2)}
+                  </span>
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                  <div className="text-xs space-x-3 font-mono tabular-nums">
-                    <span className="text-slate-700">
-                      নিট ক্রয় বিল:{' '}
-                      <strong className="text-slate-900">৳{purGrandTotal.toFixed(2)}</strong>
-                    </span>
-                    <span
-                      className={purDueAmount > 0 ? 'text-red-600 font-bold' : 'text-emerald-700'}
-                    >
-                      কোম্পানি বাকি: ৳{purDueAmount.toFixed(2)}
-                    </span>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    {isEditingPurchase && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onCancelEditInvoice();
-                            resetPurchaseFormToFresh();
-                          }}
-                          className="px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-200 hover:bg-slate-300 rounded-md transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                        >
-                          এডিট বাতিল
-                        </button>
-                        <button
-                          type="button"
-                          disabled={purchaseCart.length === 0 || submittingPurchase}
-                          onClick={() => submitPurchaseWithMode(true)}
-                          className="px-3.5 py-2 text-xs font-semibold text-indigo-900 bg-indigo-100 hover:bg-indigo-200 border border-indigo-300 rounded-md transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
-                        >
-                          নতুন ইনভয়েস হিসেবে তৈরি করুন
-                        </button>
-                      </>
-                    )}
-                    {(() => {
-                      const stockedPurUnits = purchaseCart
-                        .filter((i) => i.updateStock !== false)
-                        .reduce((acc, i) => acc + i.qty, 0);
-                      return (
-                        <button
-                          type="submit"
-                          disabled={purchaseCart.length === 0 || submittingPurchase}
-                          className="px-5 py-2.5 text-xs font-semibold text-white bg-indigo-700 hover:bg-indigo-800 rounded-md transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
-                        >
+                <div className="flex flex-wrap items-center gap-2">
+                  {isEditingPurchase && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onCancelEditInvoice();
+                          resetPurchaseFormToFresh();
+                        }}
+                        className="px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-200 hover:bg-slate-300 rounded-md transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        এডিট বাতিল
+                      </button>
+                      <button
+                        type="button"
+                        disabled={purchaseCart.length === 0 || submittingPurchase}
+                        onClick={() => submitPurchaseWithMode(true)}
+                        className="px-3.5 py-2 text-xs font-semibold text-indigo-900 bg-indigo-100 hover:bg-indigo-200 border border-indigo-300 rounded-md transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
+                      >
+                        নতুন ইনভয়েস হিসেবে তৈরি করুন
+                      </button>
+                    </>
+                  )}
+                  {(() => {
+                    const stockedPurUnits = purchaseCart
+                      .filter((i) => i.updateStock !== false && i.brandName.trim())
+                      .reduce((acc, i) => acc + i.qty, 0);
+                    return (
+                      <button
+                        type="submit"
+                        disabled={purchaseCart.length === 0 || submittingPurchase}
+                        className="px-5 py-2.5 text-xs font-bold text-white bg-indigo-700 hover:bg-indigo-800 rounded-md shadow-xs transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0 flex items-center gap-2"
+                      >
+                        <PackageCheck className="w-4 h-4" />
+                        <span>
                           {submittingPurchase
                             ? 'ক্রয় ইনভয়েস সংরক্ষণ হচ্ছে...'
                             : isEditingPurchase
@@ -2442,13 +2945,13 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                             : stockedPurUnits > 0
                             ? `ক্রয় ইনভয়েস সম্পন্ন করুন ও স্টক বাড়ান (+${stockedPurUnits} পিস) ✓`
                             : `ক্রয় ইনভয়েস সম্পন্ন করুন (শুধু ইনভয়েস, স্টক অপরিবর্তিত) ✓`}
-                        </button>
-                      );
-                    })()}
-                  </div>
+                        </span>
+                      </button>
+                    );
+                  })()}
                 </div>
-              </form>
-            </div>
+              </div>
+            </form>
           </div>
         )}
       </div>
@@ -3042,18 +3545,40 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                       }
                     >
                       <tr>
-                        <th className="py-2 px-3">ওষুধের বিবরণ (হিসাব লাইন)</th>
-                        <th className="py-2 px-2 text-center">একক দর</th>
+                        <th className="py-2 px-3">
+                          {previewInvoice.txType === 'purchase'
+                            ? 'ওষুধের বিবরণ ও প্যাক হিসাব'
+                            : 'ওষুধের বিবরণ (হিসাব লাইন)'}
+                        </th>
+                        <th className="py-2 px-2 text-center">
+                          {previewInvoice.txType === 'purchase' ? 'ক্রয় দর (৳)' : 'একক দর (৳)'}
+                        </th>
                         <th className="py-2 px-2 text-center">পরিমাণ</th>
                         <th className="py-2 px-2 text-center">স্টক পরিবর্তন</th>
-                        <th className="py-2 px-3 text-right">মোট (৳)</th>
+                        <th className="py-2 px-3 text-right">
+                          {previewInvoice.txType === 'purchase' ? 'মোট ক্রয় মূল্য (৳)' : 'মোট (৳)'}
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200 bg-slate-50/50">
                       {parsedPreviewItems.map((pItem, idx) => (
                         <tr key={idx}>
                           <td className="py-2 px-3 font-semibold text-slate-900">
-                            {pItem.rawLine}
+                            {previewInvoice.txType === 'purchase' ? (
+                              <div>
+                                <div className="font-bold text-slate-900">
+                                  {pItem.formPrefix ? `${pItem.formPrefix.toUpperCase()}. ` : ''}
+                                  {pItem.cleanName || pItem.brandAndStrength}
+                                </div>
+                                {pItem.packDetail && (
+                                  <div className="text-[11px] font-mono text-indigo-800 font-semibold mt-0.5">
+                                    প্যাক হিসাব: {pItem.packDetail}
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              pItem.rawLine
+                            )}
                           </td>
                           <td className="py-2 px-2 text-center text-slate-700">
                             ৳{formatCleanMoney(pItem.unitPrice)}

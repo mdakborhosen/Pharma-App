@@ -89,6 +89,12 @@ export function loadSavedShopCloudSession(): ShopCloudSession | null {
 
 export function saveShopCloudSession(session: ShopCloudSession | null): void {
   try {
+    const prevRaw = localStorage.getItem(SHOP_CLOUD_SESSION_KEY);
+    const newRaw = session ? JSON.stringify(session) : null;
+    if (newRaw === prevRaw) {
+      // Nothing changed: avoid dispatching storage events to prevent infinite loops
+      return;
+    }
     if (!session) {
       localStorage.removeItem(SHOP_CLOUD_SESSION_KEY);
       localStorage.setItem(LOGGED_OUT_FLAG_KEY, '1');
@@ -96,12 +102,12 @@ export function saveShopCloudSession(session: ShopCloudSession | null): void {
     } else {
       localStorage.removeItem(LOGGED_OUT_FLAG_KEY);
       sessionStorage.removeItem(EXPLICIT_LOGOUT_KEY);
-      localStorage.setItem(SHOP_CLOUD_SESSION_KEY, JSON.stringify(session));
+      localStorage.setItem(SHOP_CLOUD_SESSION_KEY, newRaw);
     }
     window.dispatchEvent(
       new StorageEvent('storage', {
         key: SHOP_CLOUD_SESSION_KEY,
-        newValue: session ? JSON.stringify(session) : null,
+        newValue: newRaw,
       })
     );
   } catch {

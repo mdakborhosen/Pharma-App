@@ -32,6 +32,7 @@ import {
   LogIn,
   LogOut,
   Menu,
+  Package,
   Unlock,
   ShieldCheck,
   ShoppingCart,
@@ -104,6 +105,7 @@ import {
   PriceAlert,
   PriceWatch,
   PurchaseCartItem,
+  PurchasePackUnit,
   ShopProfile,
   StaffMember,
   Transaction,
@@ -716,6 +718,10 @@ export default function App() {
   // Active Invoice being edited through the full New-Invoice Builder
   const [editingInvoiceTx, setEditingInvoiceTx] = useState<Transaction | null>(null);
 
+  // Active POS / Daily Accounts tab controlled across the application
+  const [posActiveTab, setPosActiveTab] = useState<'sale_pos' | 'purchase_entry'>('sale_pos');
+  const autoSignInAttemptedRef = useRef(false);
+
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
@@ -1095,13 +1101,15 @@ export default function App() {
     return () => unsub();
   }, [shopProfile.shopName, shopProfile.phone]);
 
-  // If user has an active saved ShopCloudSession on load, ensure Firebase Auth is connected in background
+  // If user has an active saved ShopCloudSession on load, ensure Firebase Auth is connected in background (run at most once per session)
   useEffect(() => {
     const isExplicitlyLoggedOut =
       typeof window !== 'undefined' &&
       (localStorage.getItem(LOGGED_OUT_FLAG_KEY) === '1' ||
         sessionStorage.getItem(EXPLICIT_LOGOUT_KEY) === '1');
     if (!authReady || user || !cloudSession || isExplicitlyLoggedOut) return;
+    if (autoSignInAttemptedRef.current) return;
+    autoSignInAttemptedRef.current = true;
     signInShopCloudAccount({
       email: cloudSession.email,
       displayName: cloudSession.displayName,
@@ -1113,7 +1121,7 @@ export default function App() {
         setCloudSession(sess);
       })
       .catch(() => {});
-  }, [authReady, user, cloudSession]);
+  }, [authReady, user, cloudSession?.email]);
 
   // Shared Pharmacy Real-Time Firestore Listeners (accessible across ALL logged-in accounts)
   useEffect(() => {
@@ -2375,7 +2383,21 @@ export default function App() {
   };
 
   // Purchase Invoice Cart Handlers (ক্রয় ইনভয়েস — স্টক বাড়বে)
-  const handleAddToPurchaseCart = (med: MedicineCatalogItem, qty = 50) => {
+  const handleAddToPurchaseCart = (
+    med: MedicineCatalogItem,
+    qty = 50,
+    packOpts?: {
+      packUnit?: PurchasePackUnit;
+      packCount?: number;
+      unitsPerPack?: number;
+      packRate?: number;
+      packDetailFormula?: string;
+      stripsPerBox?: number;
+      pcsPerStrip?: number;
+      customCost?: number;
+      updateStock?: boolean;
+    }
+  ) => {
     const invMatch = findMatchingInventoryRecord(inventory, {
       medicineId: med.id,
       brandName: med.brandName,
@@ -2384,18 +2406,36 @@ export default function App() {
     });
     const currentStock = getInventoryStockForMedicine(inventory, med);
     const retailMrp = invMatch ? invMatch.unitPrice : med.unitPrice;
-    const costPrice = invMatch
-      ? invMatch.purchasePrice
-      : typeof med.purchasePrice === 'number' && med.purchasePrice > 0
-      ? med.purchasePrice
-      : Number((retailMrp * 0.88).toFixed(2));
+    const costPrice =
+      typeof packOpts?.customCost === 'number' && packOpts.customCost > 0
+        ? packOpts.customCost
+        : invMatch
+        ? invMatch.purchasePrice
+        : typeof med.purchasePrice === 'number' && med.purchasePrice > 0
+        ? med.purchasePrice
+        : Number((retailMrp * 0.88).toFixed(2));
+
+    const updateStock = packOpts?.updateStock !== undefined ? packOpts.updateStock : true;
 
     setPurchaseCart((prev) => {
       const existing = prev.find((item) => item.medicineId === med.id);
       const next = existing
         ? prev.map((item) =>
             item.medicineId === med.id
-              ? { ...item, qty: item.qty + qty, availableStock: currentStock }
+              ? {
+                  ...item,
+                  qty: item.qty + qty,
+                  availableStock: currentStock,
+                  purchasePrice: costPrice,
+                  updateStock,
+                  packUnit: packOpts?.packUnit || item.packUnit,
+                  packCount: packOpts?.packCount ? (item.packCount || 0) + packOpts.packCount : item.packCount,
+                  unitsPerPack: packOpts?.unitsPerPack || item.unitsPerPack,
+                  packRate: packOpts?.packRate || item.packRate,
+                  packDetailFormula: packOpts?.packDetailFormula || item.packDetailFormula,
+                  stripsPerBox: packOpts?.stripsPerBox || item.stripsPerBox,
+                  pcsPerStrip: packOpts?.pcsPerStrip || item.pcsPerStrip,
+                }
               : item
           )
         : [
@@ -2415,12 +2455,23 @@ export default function App() {
               batchNo: invMatch?.batchNo || `B-${Math.floor(1000 + Math.random() * 9000)}`,
               expiryDate: invMatch?.expiryDate || '2028-06-30',
               availableStock: currentStock,
+              updateStock,
+              packUnit: packOpts?.packUnit || 'piece',
+              packCount: packOpts?.packCount || 1,
+              unitsPerPack: packOpts?.unitsPerPack,
+              packRate: packOpts?.packRate,
+              packDetailFormula: packOpts?.packDetailFormula,
+              stripsPerBox: packOpts?.stripsPerBox,
+              pcsPerStrip: packOpts?.pcsPerStrip,
             },
           ];
       saveLocal(STORAGE_KEYS.PURCHASE_CART, next);
       return next;
     });
-    showToast(`${med.brandName} (+${qty} পিস) ক্রয় ইনভয়েসে যুক্ত হয়েছে`);
+    const packMsg = packOpts?.packCount && packOpts?.packUnit && packOpts.packUnit !== 'piece'
+      ? ` (${packOpts.packCount} ${packOpts.packUnit === 'strip' ? 'পাতা' : packOpts.packUnit === 'box' ? 'বক্স' : 'কার্টুন'})`
+      : '';
+    showToast(`${med.brandName} (+${qty} পিস${packMsg}) ক্রয় ইনভয়েসে যুক্ত হয়েছে`);
   };
 
   const handleAddCustomToPurchaseCart = async (params: {
@@ -2434,7 +2485,15 @@ export default function App() {
     qty: number;
     batchNo?: string;
     expiryDate?: string;
+    updateStock?: boolean;
     saveToCatalog?: boolean;
+    packUnit?: PurchasePackUnit;
+    packCount?: number;
+    unitsPerPack?: number;
+    packRate?: number;
+    packDetailFormula?: string;
+    stripsPerBox?: number;
+    pcsPerStrip?: number;
   }) => {
     const cleanBrand = params.brandName.trim() || 'কাস্টম প্রডাক্ট';
     const cleanStrength = (params.strength || '').trim();
@@ -2450,6 +2509,7 @@ export default function App() {
     const batchNo =
       (params.batchNo || '').trim() || `B-${Math.floor(1000 + Math.random() * 9000)}`;
     const expiryDate = (params.expiryDate || '').trim() || '2028-06-30';
+    const updateStock = params.updateStock !== false;
 
     const slug = `${cleanBrand}-${cleanStrength}-${cleanForm}`
       .toLowerCase()
@@ -2483,6 +2543,14 @@ export default function App() {
                   unitPrice,
                   qty: item.qty + qty,
                   batchNo: batchNo || item.batchNo,
+                  updateStock,
+                  packUnit: params.packUnit || item.packUnit,
+                  packCount: params.packCount || item.packCount,
+                  unitsPerPack: params.unitsPerPack || item.unitsPerPack,
+                  packRate: params.packRate || item.packRate,
+                  packDetailFormula: params.packDetailFormula || item.packDetailFormula,
+                  stripsPerBox: params.stripsPerBox || item.stripsPerBox,
+                  pcsPerStrip: params.pcsPerStrip || item.pcsPerStrip,
                 }
               : item
           )
@@ -2496,47 +2564,58 @@ export default function App() {
               companyName: cleanCompany,
               strength: cleanStrength,
               dosageForm: cleanForm,
-              packSize: '10 × 10 (100 pcs)',
+              packSize: params.packDetailFormula || '10 × 10 (100 pcs)',
               purchasePrice,
               unitPrice,
               qty,
               batchNo,
               expiryDate,
               availableStock: currentStock,
+              updateStock,
+              packUnit: params.packUnit || 'piece',
+              packCount: params.packCount || 1,
+              unitsPerPack: params.unitsPerPack,
+              packRate: params.packRate,
+              packDetailFormula: params.packDetailFormula,
+              stripsPerBox: params.stripsPerBox,
+              pcsPerStrip: params.pcsPerStrip,
             },
           ];
       saveLocal(STORAGE_KEYS.PURCHASE_CART, next);
       return next;
     });
 
-    if (params.saveToCatalog) {
+    // Only save to database catalog if the user actually typed a brand name (prevent saving blank boxes to catalog)
+    if (params.brandName.trim().length > 0) {
       const existingCatalogMed = fullCatalog.find(
         (m) =>
           m.brandName.trim().toLowerCase() === cleanBrand.toLowerCase() &&
           m.strength.trim().toLowerCase() === cleanStrength.toLowerCase() &&
           m.dosageForm.trim().toLowerCase() === cleanForm.toLowerCase()
       );
-      await handleSaveMedicineCatalog(
-        {
-          brandName: cleanBrand,
-          genericName: cleanGeneric,
-          companyName: cleanCompany,
-          strength: cleanStrength || 'Standard',
-          dosageForm: cleanForm,
-          packSize: '10 × 10 (100 pcs)',
-          purchasePrice,
-          unitPrice,
-          stripPrice: Number((unitPrice * 10).toFixed(2)),
-          therapeuticClass: 'Custom Product',
-          indication: 'কাস্টম প্রডাক্ট / সাধারণ ব্যবহার্য',
-        },
-        existingCatalogMed
+      if (!existingCatalogMed || params.saveToCatalog) {
+        await handleSaveMedicineCatalog(
+          {
+            brandName: cleanBrand,
+            genericName: cleanGeneric,
+            companyName: cleanCompany,
+            strength: cleanStrength || 'Standard',
+            dosageForm: cleanForm,
+            packSize: params.packDetailFormula || '10 × 10 (100 pcs)',
+            purchasePrice,
+            unitPrice,
+            stripPrice: Number((unitPrice * 10).toFixed(2)),
+            therapeuticClass: 'Custom Product',
+            indication: 'কাস্টম প্রডাক্ট / সাধারণ ব্যবহার্য',
+          },
+          existingCatalogMed
+        );
+      }
+
+      showToast(
+        `প্রডাক্ট "${cleanBrand}${cleanStrength ? ` ${cleanStrength}` : ''}" (+${qty} পিস · ক্রয় দর ৳${formatCleanMoney(purchasePrice)}) ক্রয় বিলে যুক্ত হয়েছে!`
       );
     }
-
-    showToast(
-      `কাস্টম প্রডাক্ট "${cleanBrand}${cleanStrength ? ` ${cleanStrength}` : ''}" (+${qty} পিস · ক্রয় দর ৳${formatCleanMoney(purchasePrice)}) ক্রয় বিলে যুক্ত হয়েছে!`
-    );
   };
 
   const handleUpdatePurchaseCartItemDetails = (
@@ -3070,55 +3149,66 @@ export default function App() {
     }
 
     for (const purItem of purchaseCart) {
+      // 1. Always ensure new products are saved to the database catalog so they are suggested in future searches
+      const baseMed = fullCatalog.find(
+        (m) =>
+          m.id === purItem.medicineId ||
+          (m.brandName.trim().toLowerCase() === purItem.brandName.trim().toLowerCase() &&
+            m.strength.trim().toLowerCase() === purItem.strength.trim().toLowerCase() &&
+            m.dosageForm.trim().toLowerCase() === purItem.dosageForm.trim().toLowerCase())
+      );
+
+      if (!baseMed && purItem.brandName.trim()) {
+        const fallbackRetail =
+          purItem.unitPrice > 0
+            ? purItem.unitPrice
+            : purItem.purchasePrice > 0
+            ? Number((purItem.purchasePrice * 1.15).toFixed(2))
+            : 5;
+        await handleSaveMedicineCatalog({
+          brandName: purItem.brandName.trim(),
+          genericName: (purItem.genericName || purItem.brandName).trim(),
+          companyName: (params.supplierCompany || purItem.companyName || 'Custom / General').trim(),
+          strength: (purItem.strength || 'Standard').trim(),
+          dosageForm: (purItem.dosageForm || 'Tablet').trim(),
+          packSize: purItem.packDetailFormula || purItem.packSize || '10 × 10 (100 pcs)',
+          purchasePrice: purItem.purchasePrice,
+          unitPrice: fallbackRetail,
+          stripPrice: Number((fallbackRetail * 10).toFixed(2)),
+          therapeuticClass: 'Custom Product',
+          indication: 'কাস্টম প্রডাক্ট / সাধারণ ব্যবহার্য',
+        });
+      } else if (params.syncModifiedPricesToCatalog && baseMed) {
+        const oldPur =
+          typeof baseMed.purchasePrice === 'number' && baseMed.purchasePrice > 0
+            ? baseMed.purchasePrice
+            : Number((baseMed.unitPrice * 0.88).toFixed(2));
+        if (
+          Math.abs(baseMed.unitPrice - purItem.unitPrice) > 0.001 ||
+          Math.abs(oldPur - purItem.purchasePrice) > 0.001
+        ) {
+          await handleSaveMedicineCatalog(
+            {
+              brandName: purItem.brandName || baseMed.brandName,
+              genericName: purItem.genericName || baseMed.genericName,
+              companyName: params.supplierCompany || baseMed.companyName,
+              strength: purItem.strength || baseMed.strength,
+              dosageForm: purItem.dosageForm || baseMed.dosageForm,
+              packSize: baseMed.packSize,
+              purchasePrice: purItem.purchasePrice,
+              unitPrice: purItem.unitPrice,
+              stripPrice: Number((purItem.unitPrice * (baseMed.unitsPerStrip || 10)).toFixed(2)),
+              therapeuticClass: baseMed.therapeuticClass,
+              indication: baseMed.indication,
+            },
+            baseMed
+          );
+        }
+      }
+
       // If updateStock is explicitly false (not checked), DO NOT touch stock, DO NOT touch inventory
       if (purItem.updateStock === false) {
         continue;
-      }
-
-      // Only sync modified master catalog price if user explicitly chose syncModifiedPricesToCatalog
-      if (params.syncModifiedPricesToCatalog) {
-        const baseMed = fullCatalog.find((m) => m.id === purItem.medicineId);
-        if (baseMed) {
-          const oldPur =
-            typeof baseMed.purchasePrice === 'number' && baseMed.purchasePrice > 0
-              ? baseMed.purchasePrice
-              : Number((baseMed.unitPrice * 0.88).toFixed(2));
-          if (
-            Math.abs(baseMed.unitPrice - purItem.unitPrice) > 0.001 ||
-            Math.abs(oldPur - purItem.purchasePrice) > 0.001
-          ) {
-            await handleSaveMedicineCatalog(
-              {
-                brandName: purItem.brandName || baseMed.brandName,
-                genericName: purItem.genericName || baseMed.genericName,
-                companyName: params.supplierCompany || baseMed.companyName,
-                strength: purItem.strength || baseMed.strength,
-                dosageForm: purItem.dosageForm || baseMed.dosageForm,
-                packSize: baseMed.packSize,
-                purchasePrice: purItem.purchasePrice,
-                unitPrice: purItem.unitPrice,
-                stripPrice: Number((purItem.unitPrice * (baseMed.unitsPerStrip || 10)).toFixed(2)),
-                therapeuticClass: baseMed.therapeuticClass,
-                indication: baseMed.indication,
-              },
-              baseMed
-            );
-          }
-        } else if (purItem.brandName.trim()) {
-          await handleSaveMedicineCatalog({
-            brandName: purItem.brandName.trim(),
-            genericName: (purItem.genericName || purItem.brandName).trim(),
-            companyName: (params.supplierCompany || purItem.companyName || 'Custom / General').trim(),
-            strength: (purItem.strength || 'Standard').trim(),
-            dosageForm: (purItem.dosageForm || 'Tablet').trim(),
-            packSize: purItem.packSize || '10 × 10 (100 pcs)',
-            purchasePrice: purItem.purchasePrice,
-            unitPrice: purItem.unitPrice,
-            stripPrice: Number((purItem.unitPrice * 10).toFixed(2)),
-            therapeuticClass: 'Custom Product',
-            indication: 'কাস্টম প্রডাক্ট / সাধারণ ব্যবহার্য',
-          });
-        }
       }
 
       const existingInv = findMatchingInventoryRecord(nextInventoryList, {
@@ -4362,14 +4452,72 @@ export default function App() {
           })}
         </nav>
 
-        {/* Zone 3: 1 primary action */}
-        <div className="flex items-center gap-2.5 shrink-0">
+        {/* Zone 3: Cart Quick Action Buttons & Cloud Authentication */}
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Purchase Cart (ক্রয় কার্ট) Header Button */}
+          <button
+            type="button"
+            onClick={() => {
+              setActiveSection('pos_accounts');
+              setPosActiveTab('purchase_entry');
+              showToast('ক্রয় কার্ট ও ইনভয়েস বিল এন্ট্রি খোলা হয়েছে');
+            }}
+            className={`px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-md border transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer shadow-2xs hover:shadow-xs active:scale-95 ${
+              activeSection === 'pos_accounts' && posActiveTab === 'purchase_entry'
+                ? 'bg-indigo-600 text-white border-indigo-700 font-bold'
+                : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border-indigo-200'
+            }`}
+            title="ক্রয় কার্ট / Purchase Cart দেখুন ও নতুন চালান তৈরি করুন"
+            aria-label="ক্রয় কার্ট"
+          >
+            <Package className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${
+              activeSection === 'pos_accounts' && posActiveTab === 'purchase_entry' ? 'text-white' : 'text-indigo-700'
+            }`} />
+            <span className="font-bold">ক্রয় কার্ট</span>
+            <span className={`px-1.5 py-0.2 text-[11px] font-mono font-bold rounded-full min-w-4 text-center leading-tight ${
+              activeSection === 'pos_accounts' && posActiveTab === 'purchase_entry'
+                ? 'bg-white text-indigo-800'
+                : 'bg-indigo-600 text-white'
+            }`}>
+              {purchaseCart.length}
+            </span>
+          </button>
+
+          {/* Sell Cart (বিক্রয় কার্ট) Header Button */}
+          <button
+            type="button"
+            onClick={() => {
+              setActiveSection('pos_accounts');
+              setPosActiveTab('sale_pos');
+              showToast('বিক্রয় কার্ট ও ক্যাশ মেমো খোলা হয়েছে');
+            }}
+            className={`px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-md border transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer shadow-2xs hover:shadow-xs active:scale-95 ${
+              activeSection === 'pos_accounts' && posActiveTab === 'sale_pos'
+                ? 'bg-emerald-600 text-white border-emerald-700 font-bold'
+                : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border-emerald-300'
+            }`}
+            title="বিক্রয় কার্ট / Sell Cart (POS) দেখুন ও মেমো তৈরি করুন"
+            aria-label="বিক্রয় কার্ট"
+          >
+            <ShoppingCart className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${
+              activeSection === 'pos_accounts' && posActiveTab === 'sale_pos' ? 'text-white' : 'text-emerald-700'
+            }`} />
+            <span className="font-bold">বিক্রয় কার্ট</span>
+            <span className={`px-1.5 py-0.2 text-[11px] font-mono font-bold rounded-full min-w-4 text-center leading-tight ${
+              activeSection === 'pos_accounts' && posActiveTab === 'sale_pos'
+                ? 'bg-white text-emerald-800'
+                : 'bg-emerald-600 text-white'
+            }`}>
+              {posCart.length}
+            </span>
+          </button>
+
           {isCloudLoggedIn ? (
             <>
               <button
                 type="button"
                 onClick={() => setShowCloudLoginModal(true)}
-                className="hidden sm:flex px-3 py-2 text-xs font-semibold text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-md transition-colors items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                className="hidden xl:flex px-2.5 py-1.5 text-xs font-semibold text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-md transition-colors items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                 title="দোকান ক্লাউড একাউন্ট বিস্তারিত"
               >
                 <Cloud className="w-3.5 h-3.5 text-teal-700" />
@@ -4378,20 +4526,22 @@ export default function App() {
               <button
                 type="button"
                 onClick={handleCloudLogout}
-                className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                className="px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <LogOut className="w-3.5 h-3.5" />
-                লগআউট ({getOperatorName(activeStaff)})
+                <span className="hidden sm:inline">লগআউট ({getOperatorName(activeStaff)})</span>
+                <span className="sm:hidden">লগআউট</span>
               </button>
             </>
           ) : (
             <button
               type="button"
               onClick={() => setShowCloudLoginModal(true)}
-              className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+              className="px-3 sm:px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <LogIn className="w-3.5 h-3.5" />
-              দোকান ক্লাউড লগইন
+              <span className="hidden sm:inline">দোকান ক্লাউড লগইন</span>
+              <span className="sm:hidden">লগইন</span>
             </button>
           )}
         </div>
@@ -4886,6 +5036,7 @@ export default function App() {
                   priceAlerts={priceAlerts}
                   publicAppUrl={PUBLIC_APP_URL}
                   onAddToPosCart={handleAddToPosCart}
+                  onAddToPurchaseCart={handleAddToPurchaseCart}
                   onQuickAddInventory={handleQuickAddInventoryFromCompare}
                   onSaveMedicineCatalog={handleSaveMedicineCatalog}
                   onDeleteCustomMedicine={handleDeleteCustomMedicine}
@@ -4903,6 +5054,8 @@ export default function App() {
                   transactions={transactions}
                   staffList={staffList}
                   activeStaff={activeStaff}
+                  selectedTab={posActiveTab}
+                  onTabChange={setPosActiveTab}
                   onSelectActiveStaff={(st) => {
                     setActiveStaff(st);
                     showToast(`সক্রিয় অপারেটর: ${getOperatorName(st)}`);
@@ -4941,6 +5094,7 @@ export default function App() {
                   onEditTransaction={handleEditTransaction}
                   onDeleteTransaction={handleDeleteTransaction}
                   shopProfile={shopProfile}
+                  onSaveMedicineCatalog={handleSaveMedicineCatalog}
                 />
               )}
 
