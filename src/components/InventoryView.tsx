@@ -7,11 +7,14 @@ import {
   Edit3,
   FlaskConical,
   Lock,
+  Package,
   PackagePlus,
   Pill,
   Plus,
   Search,
+  ShoppingCart,
   Trash2,
+  X,
 } from 'lucide-react';
 import {
   BD_GENERICS_DIRECTORY,
@@ -38,6 +41,8 @@ interface InventoryViewProps {
   ) => Promise<void>;
   onDeleteInventoryItem: (id: string) => Promise<void>;
   onQuickRestock: (item: InventoryItem, addQty: number) => Promise<void>;
+  onAddToPosCart?: (med: MedicineCatalogItem, qty: number) => void;
+  onAddToPurchaseCart?: (med: MedicineCatalogItem, qty?: number) => void;
 }
 
 export const InventoryView: React.FC<InventoryViewProps> = ({
@@ -46,6 +51,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   onSaveInventoryItem,
   onDeleteInventoryItem,
   onQuickRestock,
+  onAddToPosCart,
+  onAddToPurchaseCart,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMode, setFilterMode] = useState<'all' | 'low_stock' | 'expiring'>('all');
@@ -536,8 +543,19 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="ওষুধের নাম, ফর্ম (Syp, Cap, Tab, Supp, Inhaler, Sachet), mg/ml বা ব্যাচ দিয়ে খুঁজুন..."
-                className="w-full pl-9 pr-3 py-1.5 text-sm bg-white border border-slate-200 rounded-md focus:border-teal-600 focus:outline-none"
+                className="w-full pl-9 pr-8 py-1.5 text-sm bg-white border border-slate-200 rounded-md focus:border-teal-600 focus:outline-none"
               />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full cursor-pointer transition-colors"
+                  title="সার্চ মুছে ফেলুন"
+                  aria-label="সার্চ মুছে ফেলুন"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
             <div className="text-xs text-slate-500 hidden sm:block">
               ফর্ম (Syp, Cap, Tab, Supp, Inhaler, Sachet) ও mg/ml অনুপাতে একক এবং মোট স্টকের দাম প্রদর্শিত হচ্ছে
@@ -622,6 +640,69 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                       <td className="py-2.5 px-4">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="font-bold text-slate-900">{item.brandName}</span>
+                          {/* Cart Action Buttons right beside product name */}
+                          <div className="inline-flex items-center gap-1 ml-1" onClick={(e) => e.stopPropagation()}>
+                            {onAddToPosCart && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const matchedMed: MedicineCatalogItem = catalog.find((c) => c.id === item.medicineId) || {
+                                    id: item.medicineId || item.id,
+                                    brandName: item.brandName,
+                                    genericName: item.genericName,
+                                    companyName: item.companyName,
+                                    strength: item.strength,
+                                    dosageForm: (item.dosageForm as MedicineCatalogItem['dosageForm']) || 'Tablet',
+                                    packSize: item.packSize,
+                                    unitsPerStrip: 10,
+                                    purchasePrice: item.purchasePrice,
+                                    unitPrice: item.unitPrice,
+                                    stripPrice: item.unitPrice * 10,
+                                    therapeuticClass: 'General',
+                                    indication: 'নিয়মিত সেব্য',
+                                    darNo: '000-000-00',
+                                    isCoreProduct: false,
+                                  };
+                                  onAddToPosCart(matchedMed, 1);
+                                }}
+                                title="বিক্রয় কার্ট / Sell Cart-এ যোগ করুন"
+                                className="px-2 py-0.5 text-[11px] font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded inline-flex items-center gap-1 transition-all cursor-pointer shadow-2xs hover:shadow-xs active:scale-95"
+                              >
+                                <ShoppingCart className="w-3 h-3 text-emerald-700" />
+                                <span>বিক্রয়</span>
+                              </button>
+                            )}
+                            {onAddToPurchaseCart && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const matchedMed: MedicineCatalogItem = catalog.find((c) => c.id === item.medicineId) || {
+                                    id: item.medicineId || item.id,
+                                    brandName: item.brandName,
+                                    genericName: item.genericName,
+                                    companyName: item.companyName,
+                                    strength: item.strength,
+                                    dosageForm: (item.dosageForm as MedicineCatalogItem['dosageForm']) || 'Tablet',
+                                    packSize: item.packSize,
+                                    unitsPerStrip: 10,
+                                    purchasePrice: item.purchasePrice,
+                                    unitPrice: item.unitPrice,
+                                    stripPrice: item.unitPrice * 10,
+                                    therapeuticClass: 'General',
+                                    indication: 'নিয়মিত সেব্য',
+                                    darNo: '000-000-00',
+                                    isCoreProduct: false,
+                                  };
+                                  onAddToPurchaseCart(matchedMed, 10);
+                                }}
+                                title="ক্রয় কার্ট / Purchase Cart-এ যোগ করুন"
+                                className="px-2 py-0.5 text-[11px] font-bold text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-300 rounded inline-flex items-center gap-1 transition-all cursor-pointer shadow-2xs hover:shadow-xs active:scale-95"
+                              >
+                                <Package className="w-3 h-3 text-indigo-700" />
+                                <span>ক্রয়</span>
+                              </button>
+                            )}
+                          </div>
                           <span className="px-1.5 py-0.5 text-[11px] font-mono font-bold bg-teal-50 text-teal-800 border border-teal-200 rounded">
                             {shortForm} · {item.strength}
                           </span>

@@ -1586,9 +1586,7 @@ export const CORE_GENERIC_BLUEPRINTS: GenericMetaSeed[] = [
     packLabel: '1 × 28 Tablets (1 Cycle Pack)',
     verifiedBrands: [
       { brand: 'Noret-28', company: 'SMC Enterprise Ltd.', unitPrice: 40.0 },
-      { brand: 'Noret', company: 'SMC Enterprise Ltd.', unitPrice: 40.0 },
       { brand: 'Femicon', company: 'SMC Enterprise Ltd.', unitPrice: 45.0 },
-      { brand: 'Femicom', company: 'SMC Enterprise Ltd.', unitPrice: 45.0 },
       { brand: 'Shukhi', company: 'SMC Enterprise Ltd.', unitPrice: 25.0 },
       { brand: 'Sukhi', company: 'SMC Enterprise Ltd.', unitPrice: 25.0 },
       { brand: 'Maya', company: 'SMC Enterprise Ltd.', unitPrice: 45.0 },
@@ -2849,8 +2847,24 @@ export function buildNationalMedicineDatabase(
 
   const allMedicines: MedicineCatalogItem[] = [...curatedMedicines];
   const existingBrandKeys = new Set<string>();
+  const getBrandRoot = (name: string): string => {
+    return (
+      name
+        .trim()
+        .toLowerCase()
+        .replace(
+          /\s+(?:MUPS|Extend|Plus|Extra|XR|SR|CR|ER|DS|Max|Forte|Vet|Pediatric|Paediatric|P-Drop|Drops|Syrup|Suspension|Sachet|Inhaler|Cozycap|Rotacap|Respules|Eye|Ear|Nasal|Suppository|Inj|IV|IM|Cream|Gel|Ointment|28|21)\b.*$/i,
+          ''
+        )
+        .trim() || name.trim().toLowerCase()
+    );
+  };
+
+  const curatedBrandFamilySet = new Set<string>();
   for (const m of curatedMedicines) {
-    const bLow = m.brandName.toLowerCase();
+    const bLow = m.brandName.toLowerCase().trim();
+    curatedBrandFamilySet.add(bLow);
+    curatedBrandFamilySet.add(getBrandRoot(m.brandName));
     const fLow = m.dosageForm.toLowerCase();
     const pNum = parsePrimaryNumber(m.strength);
     existingBrandKeys.add(`${bLow}__${m.strength.toLowerCase()}`);
@@ -2893,6 +2907,14 @@ export function buildNationalMedicineDatabase(
       const vb = bp.verifiedBrands[vIdx];
       const company = vb.company;
       const brandName = vb.brand;
+
+      // Authentic curated brands already have exact DGDA registrations in curatedMedicines; do not synthesize fake forms
+      if (
+        curatedBrandFamilySet.has(brandName.toLowerCase().trim()) ||
+        curatedBrandFamilySet.has(getBrandRoot(brandName))
+      ) {
+        continue;
+      }
 
       for (let sIdx = 0; sIdx < fullStrengthsList.length; sIdx++) {
         const rawStrength = fullStrengthsList[sIdx];
@@ -3082,166 +3104,7 @@ export function buildNationalMedicineDatabase(
     }
   }
 
-  // 3.5 Ensure every curated brand root also has all 13 dosage forms (Tablet, Capsule, Syrup, Suspension, Sachet, Drops, Eye Drop, Ear Drop, Nasal Drop, Suppository, Inhaler, Injection, Gel)
-  const curatedRootMap = new Map<string, MedicineCatalogItem>();
-  for (const m of curatedMedicines) {
-    const rootName = m.brandName
-      .trim()
-      .replace(/\s+(?:MUPS|Extend|Plus|Extra|XR|SR|CR|ER|DS|Max|Forte|Vet|Pediatric|Paediatric|P-Drop|Drops|Syrup|Suspension|Sachet|Inhaler|Cozycap|Rotacap|Respules|Eye|Ear|Nasal|Suppository|Inj|IV|IM|Cream|Gel|Ointment|28|21)\b.*$/i, '')
-      .trim() || m.brandName.trim();
-    const key = `${rootName.toLowerCase()}__${m.companyName.toLowerCase()}`;
-    if (!curatedRootMap.has(key)) {
-      curatedRootMap.set(key, { ...m, brandName: rootName });
-    }
-  }
 
-  const allStandardForms: {
-    form: MedicineCatalogItem['dosageForm'];
-    strength: (baseMg: number) => string;
-    packSize: (strength: string) => string;
-    unitsPerStrip: number;
-    calcPrice: (basePrice: number) => number;
-  }[] = [
-    {
-      form: 'Tablet',
-      strength: (mg) => `${mg} mg`,
-      packSize: () => '3 × 10 (30 Tablets)',
-      unitsPerStrip: 10,
-      calcPrice: (p) => Math.max(1.2, p <= 25 ? p : 6.0),
-    },
-    {
-      form: 'Capsule',
-      strength: (mg) => `${mg} mg`,
-      packSize: () => '3 × 10 (30 Capsules)',
-      unitsPerStrip: 10,
-      calcPrice: (p) => Math.max(2.0, p <= 30 ? Number((p * 1.1).toFixed(2)) : 7.0),
-    },
-    {
-      form: 'Syrup',
-      strength: (mg) => `100 ml (${mg} mg/5 ml)`,
-      packSize: (s) => `1 × 1 (Syrup — ${s})`,
-      unitsPerStrip: 1,
-      calcPrice: (p) => (p >= 30 && p <= 120 ? p : 45.0),
-    },
-    {
-      form: 'Suspension',
-      strength: (mg) => `60 ml (${mg} mg/5 ml)`,
-      packSize: (s) => `1 × 1 (Suspension — ${s})`,
-      unitsPerStrip: 1,
-      calcPrice: (p) => (p >= 35 && p <= 150 ? p : 55.0),
-    },
-    {
-      form: 'Sachet',
-      strength: (mg) => `${mg} mg Oral Sachet`,
-      packSize: () => "1 × 10 (10's Sachet Box)",
-      unitsPerStrip: 10,
-      calcPrice: () => 12.0,
-    },
-    {
-      form: 'Drops',
-      strength: () => '15 ml Paediatric Drops',
-      packSize: () => '1 × 1 (15 ml Paediatric Drops w/ Dropper)',
-      unitsPerStrip: 1,
-      calcPrice: () => 30.0,
-    },
-    {
-      form: 'Eye Drop',
-      strength: () => '5 ml Eye Drop (0.5% w/v)',
-      packSize: () => '1 × 1 (5 ml Sterile Eye Drop)',
-      unitsPerStrip: 1,
-      calcPrice: () => 85.0,
-    },
-    {
-      form: 'Ear Drop',
-      strength: () => '5 ml Ear Drop (0.3% w/v)',
-      packSize: () => '1 × 1 (5 ml Sterile Ear Drop)',
-      unitsPerStrip: 1,
-      calcPrice: () => 55.0,
-    },
-    {
-      form: 'Nasal Drop',
-      strength: () => '15 ml Nasal Drop (0.1% w/v)',
-      packSize: () => '1 × 1 (15 ml Nasal Drop)',
-      unitsPerStrip: 1,
-      calcPrice: () => 30.0,
-    },
-    {
-      form: 'Suppository',
-      strength: () => '125 mg Suppository',
-      packSize: () => '2 × 5 (10 Suppositories)',
-      unitsPerStrip: 10,
-      calcPrice: () => 6.0,
-    },
-    {
-      form: 'Inhaler',
-      strength: () => '100 mcg/puff (200 MD)',
-      packSize: () => '1 × 1 (200 Metered Doses Inhaler)',
-      unitsPerStrip: 1,
-      calcPrice: () => 250.0,
-    },
-    {
-      form: 'Injection',
-      strength: (mg) => `${mg} mg/vial IV Inj`,
-      packSize: () => '1 × 1 (1 Vial + Sterile Water)',
-      unitsPerStrip: 1,
-      calcPrice: () => 90.0,
-    },
-    {
-      form: 'Gel',
-      strength: () => '15 g Tube (1% w/w)',
-      packSize: () => '1 × 1 (15 g Lami Tube)',
-      unitsPerStrip: 1,
-      calcPrice: () => 55.0,
-    },
-  ];
-
-  for (const baseMed of curatedRootMap.values()) {
-    const bLow = baseMed.brandName.toLowerCase();
-    const baseMg = parsePrimaryNumber(baseMed.strength) || 20;
-    const gEntry = genericMap.get(baseMed.genericName.toLowerCase());
-
-    for (const std of allStandardForms) {
-      const fLow = std.form.toLowerCase();
-      const str = std.strength(baseMg);
-      const sNum = parsePrimaryNumber(str);
-      const exactKey = `${bLow}__${fLow}__${str.toLowerCase()}`;
-      const formNumKey = `${bLow}__${fLow}__${sNum}`;
-
-      if (existingBrandKeys.has(exactKey) || existingBrandKeys.has(formNumKey)) {
-        continue;
-      }
-      existingBrandKeys.add(exactKey);
-      existingBrandKeys.add(formNumKey);
-
-      const unitPrice = Number(std.calcPrice(baseMed.unitPrice).toFixed(2));
-      const stripPrice = Number((unitPrice * std.unitsPerStrip).toFixed(2));
-
-      allMedicines.push({
-        id: `med-nat-${seq++}`,
-        brandName: baseMed.brandName,
-        genericName: baseMed.genericName,
-        companyName: baseMed.companyName,
-        strength: str,
-        dosageForm: std.form,
-        packSize: std.packSize(str),
-        unitsPerStrip: std.unitsPerStrip,
-        purchasePrice: Number((unitPrice * 0.88).toFixed(2)),
-        unitPrice,
-        stripPrice,
-        therapeuticClass: baseMed.therapeuticClass,
-        indication: baseMed.indication,
-        darNo: baseMed.darNo || `112-${String((seq % 899) + 100)}-45`,
-        availableDosages: 'Tab, Cap, Syp, Susp, Sachet, Drops, Eye Drop, Ear Drop, Nasal Drop, Supp, Inhaler, Inj, Gel',
-        isCoreProduct: true,
-      });
-
-      if (gEntry) gEntry.brandCount += 1;
-      companyBrandCounts.set(
-        baseMed.companyName,
-        (companyBrandCounts.get(baseMed.companyName) || 0) + 1
-      );
-    }
-  }
 
   // 4. Populate brands across all 1,835+ generics and all 258 companies across all 13 dosage forms
   const allGenericEntries = Array.from(genericMap.values());

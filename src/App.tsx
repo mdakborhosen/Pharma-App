@@ -721,6 +721,10 @@ export default function App() {
   // Active POS / Daily Accounts tab controlled across the application
   const [posActiveTab, setPosActiveTab] = useState<'sale_pos' | 'purchase_entry'>('sale_pos');
   const autoSignInAttemptedRef = useRef(false);
+  const shopProfileRef = useRef(shopProfile);
+  useEffect(() => {
+    shopProfileRef.current = shopProfile;
+  }, [shopProfile]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -1078,28 +1082,37 @@ export default function App() {
       if (currUser) {
         const saved = loadSavedShopCloudSession();
         if (saved) {
-          setCloudSession(saved);
+          setCloudSession((prev) => {
+            if (prev && prev.uid === saved.uid && prev.email === saved.email) return prev;
+            return saved;
+          });
         } else {
           const synced: ShopCloudSession = {
             uid: currUser.uid,
             email: currUser.email || 'mhakbor2001@gmail.com',
             displayName: currUser.displayName || 'ইকবাল মাহমুদ (Owner)',
-            shopName: shopProfile.shopName || 'ইকবাল ফার্মেসী',
-            phone: shopProfile.phone || '01812-358839',
+            shopName: shopProfileRef.current.shopName || 'ইকবাল ফার্মেসী',
+            phone: shopProfileRef.current.phone || '01812-358839',
             operatorRole: 'owner',
             loggedInAt: Date.now(),
           };
           saveShopCloudSession(synced);
-          setCloudSession(synced);
+          setCloudSession((prev) => {
+            if (prev && prev.uid === synced.uid && prev.email === synced.email) return prev;
+            return synced;
+          });
         }
       } else {
         const saved = loadSavedShopCloudSession();
-        setCloudSession(saved);
+        setCloudSession((prev) => {
+          if (prev && saved && prev.uid === saved.uid && prev.email === saved.email) return prev;
+          return saved;
+        });
       }
       setAuthReady(true);
     });
     return () => unsub();
-  }, [shopProfile.shopName, shopProfile.phone]);
+  }, []);
 
   // If user has an active saved ShopCloudSession on load, ensure Firebase Auth is connected in background (run at most once per session)
   useEffect(() => {
@@ -1430,11 +1443,6 @@ export default function App() {
           const { merged, toUploadToCloud } = mergeCloudAndLocal(cloudItems, prev);
           const finalMerged = merged.length > 0 ? merged : INITIAL_DEMO_STAFF;
           saveLocal(STORAGE_KEYS.STAFF, finalMerged);
-          if (finalMerged.length > 0) {
-            setActiveStaff(
-              (curr) => finalMerged.find((i) => i.id === getCanonicalDocId(curr.id)) || finalMerged[0]
-            );
-          }
 
           for (const item of toUploadToCloud) {
             const canonId = getCanonicalDocId(item.id);
@@ -1452,6 +1460,14 @@ export default function App() {
             }
           }
           return finalMerged;
+        });
+
+        // Safely update active staff outside the setState updater
+        queueMicrotask(() => {
+          setActiveStaff((curr) => {
+            const currentStaffList = loadLocal<StaffMember[]>(STORAGE_KEYS.STAFF, INITIAL_DEMO_STAFF);
+            return currentStaffList.find((i) => i.id === getCanonicalDocId(curr.id)) || currentStaffList[0] || curr;
+          });
         });
       },
       (err) => handleFirestoreError(err, OperationType.LIST, 'staff')
@@ -5105,6 +5121,8 @@ export default function App() {
                   onSaveInventoryItem={handleSaveInventoryItem}
                   onDeleteInventoryItem={handleDeleteInventoryItem}
                   onQuickRestock={handleQuickRestock}
+                  onAddToPosCart={handleAddToPosCart}
+                  onAddToPurchaseCart={handleAddToPurchaseCart}
                 />
               )}
 

@@ -7,6 +7,7 @@ import {
   Trash2,
   UserPlus,
   Wallet,
+  X,
 } from 'lucide-react';
 import { formatTransactionItemsList } from '../data/bdMedicines';
 import { Customer, StaffMember, Transaction } from '../types';
@@ -254,8 +255,19 @@ export const CustomerLedgerView: React.FC<CustomerLedgerViewProps> = ({
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="নাম বা মোবাইল নম্বর দিয়ে খুঁজুন..."
-                className="w-full pl-9 pr-3 py-1.5 text-xs bg-white border border-slate-200 rounded-md focus:border-teal-600 focus:outline-none"
+                className="w-full pl-9 pr-8 py-1.5 text-xs bg-white border border-slate-200 rounded-md focus:border-teal-600 focus:outline-none"
               />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full cursor-pointer transition-colors"
+                  title="সার্চ মুছে ফেলুন"
+                  aria-label="সার্চ মুছে ফেলুন"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
             <div className="flex items-center gap-1 bg-slate-200/70 p-1 rounded">
               <button

@@ -3616,6 +3616,38 @@ export const CURATED_BD_MEDICINES: MedicineCatalogItem[] = [
     availableDosages: '40 mg IV Injection, 20 mg Capsule, 40 mg Capsule, 20 mg Sachet',
   },
   {
+    id: 'med-seclo-10',
+    brandName: 'Seclo',
+    genericName: 'Omeprazole',
+    companyName: 'Square Pharmaceuticals PLC',
+    strength: '10 mg',
+    dosageForm: 'Capsule',
+    packSize: '10 × 10 (100 pcs)',
+    unitsPerStrip: 10,
+    unitPrice: 4.0,
+    stripPrice: 40.0,
+    therapeuticClass: 'Proton Pump Inhibitor (Gastric)',
+    indication: 'হালকা গ্যাস্ট্রিক অ্যাসিডিটি ও পেটের অস্বস্তি নিরাময়ে ব্যবহৃত কম ডোজের সেকলো',
+    darNo: '018-111-043',
+    availableDosages: '10 mg Capsule, 20 mg Capsule, 40 mg Capsule, 20 mg MUPS, 40 mg MUPS',
+  },
+  {
+    id: 'med-seclo-sachet-40',
+    brandName: 'Seclo',
+    genericName: 'Omeprazole',
+    companyName: 'Square Pharmaceuticals PLC',
+    strength: '40 mg Oral Powder Sachet',
+    dosageForm: 'Sachet',
+    packSize: '1 × 10 (10 Sachets)',
+    unitsPerStrip: 10,
+    unitPrice: 15.0,
+    stripPrice: 150.0,
+    therapeuticClass: 'Proton Pump Inhibitor (Oral Suspension Sachet)',
+    indication: 'তীব্র গ্যাস্ট্রিক আলসার ও বুক জ্বালাপোড়া উপশমে উচ্চমাত্রার সেকলো স্যাচেট',
+    darNo: '018-116-043',
+    availableDosages: '20 mg Sachet, 40 mg Sachet, 20 mg Capsule, 40 mg Capsule',
+  },
+  {
     id: 'med-sergel-mups-20',
     brandName: 'Sergel MUPS',
     genericName: 'Esomeprazole',
@@ -3821,25 +3853,9 @@ export const CURATED_BD_MEDICINES: MedicineCatalogItem[] = [
     unitPrice: 45.0,
     stripPrice: 45.0,
     therapeuticClass: 'Oral Contraceptive Pill (Birth Control)',
-    indication: 'জন্মবিরতিকরণ পিল (ফেমিকন), মাসিক নিয়মিতকরণ ও আয়রন ঘাটতি পূরণে ব্যবহৃত (২৮টি পিলের পাতা)',
+    indication: 'জন্মবিরতিকরণ পিল (Femicon / Femicom — ফেমিকন ২৮টি পিলের পাতা), মাসিক নিয়মিতকরণ ও আয়রন ঘাটতি পূরণে ব্যবহৃত',
     darNo: '295-001-062',
     availableDosages: '0.15 mg + 0.03 mg (28 Pills Cycle)',
-  },
-  {
-    id: 'med-femicom-28',
-    brandName: 'Femicom',
-    genericName: 'Levonorgestrel + Ethinylestradiol + Ferrous Fumarate',
-    companyName: 'SMC Enterprise Ltd.',
-    strength: '0.15 mg + 0.03 mg (28 Pills Pack)',
-    dosageForm: 'Tablet',
-    packSize: '1 × 28 Tablets (1 Cycle Pack)',
-    unitsPerStrip: 1,
-    unitPrice: 45.0,
-    stripPrice: 45.0,
-    therapeuticClass: 'Oral Contraceptive Pill (Birth Control)',
-    indication: 'জন্মবিরতিকরণ পিল (Femicon / Femicom — ফেমিকন ২৮টি পিলের পাতা)',
-    darNo: '295-002-062',
-    availableDosages: '0.15 mg + 0.03 mg (28 Pills Pack)',
   },
   {
     id: 'med-microlon-21',
@@ -4449,125 +4465,8 @@ export function getBrandFormAndStrengthVariants(
     return a.unitPrice - b.unitPrice;
   });
 
-  // Parse availableDosages field if present on primaryRef to include any explicit strengths
-  if (primaryRef && primaryRef.availableDosages) {
-    const parts = primaryRef.availableDosages
-      .split(',')
-      .map((p) => p.trim())
-      .filter(Boolean);
-
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      const pLower = part.toLowerCase();
-      let inferredForm: MedicineCatalogItem['dosageForm'] = primaryRef.dosageForm;
-      if (pLower.includes('eye drop')) inferredForm = 'Eye Drop';
-      else if (pLower.includes('ear drop')) inferredForm = 'Ear Drop';
-      else if (pLower.includes('nasal')) inferredForm = 'Nasal Drop';
-      else if (pLower.includes('supp')) inferredForm = 'Suppository';
-      else if (pLower.includes('syp') || pLower.includes('syrup')) inferredForm = 'Syrup';
-      else if (pLower.includes('susp')) inferredForm = 'Suspension';
-      else if (pLower.includes('drop')) inferredForm = 'Drops';
-      else if (pLower.includes('sachet')) inferredForm = 'Sachet';
-      else if (pLower.includes('inhaler')) inferredForm = 'Inhaler';
-      else if (pLower.includes('inj') || pLower.includes('vial') || pLower.includes('amp')) inferredForm = 'Injection';
-      else if (pLower.includes('cream') || pLower.includes('gel') || pLower.includes('oint') || pLower.includes('lotion')) inferredForm = 'Gel';
-      else if (pLower.includes('cap')) inferredForm = 'Capsule';
-      else if (pLower.includes('tab')) inferredForm = 'Tablet';
-
-      const cleanStr = part
-        .replace(/\b(Suspension|Syrup|Suppository|Capsule|Cap|Tablet|Tab|Sachet|Inj|Injection)\b/gi, '')
-        .replace(/\s{2,}/g, ' ')
-        .trim() || part;
-
-      const sForm = getShortDosageForm(inferredForm);
-      const numMatch = cleanStr.match(/(\d+(?:\.\d+)?)/);
-      const pNum = numMatch ? numMatch[1] : cleanStr.toLowerCase();
-      const dedupKey = `${primaryRef.brandName.toLowerCase()}__${sForm}__${pNum}`;
-
-      if (!seenKeys.has(dedupKey)) {
-        seenKeys.add(dedupKey);
-        const calc = calculateProportionalMedicinePrice({
-          catalog,
-          brandName: primaryRef.brandName,
-          genericName: primaryRef.genericName,
-          targetForm: inferredForm,
-          targetStrength: cleanStr,
-          currentUnitPrice: primaryRef.unitPrice,
-        });
-        uniqueVariants.push({
-          ...primaryRef,
-          id: `${primaryRef.id}-var-${i}`,
-          dosageForm: inferredForm,
-          strength: cleanStr,
-          purchasePrice: calc.purchasePrice,
-          unitPrice: calc.unitPrice,
-          stripPrice: calc.stripPrice,
-          packSize: calc.packSize,
-          unitsPerStrip: calc.unitsPerStrip,
-          isCoreProduct: primaryRef.isCoreProduct ?? true,
-        });
-      }
-    }
-  }
-
-  // Guarantee that every brand has all 13 standard dosage forms (Tablet, Capsule, Syrup, Suspension, Sachet, Drops, Eye Drop, Ear Drop, Nasal Drop, Suppository, Inhaler, Injection, Gel)
-  if (primaryRef) {
-    const presentShortForms = new Set(uniqueVariants.map((v) => getShortDosageForm(v.dosageForm)));
-    const baseNumMatch = primaryRef.strength.match(/(\d+(?:\.\d+)?)/);
-    const baseMg = baseNumMatch ? parseFloat(baseNumMatch[1]) : 20;
-    const rootBrand = getRootBrandFamily(primaryRef.brandName);
-    const displayBrand =
-      primaryRef.brandName.split(/\s+/)[0].length >= 3
-        ? primaryRef.brandName.replace(/\s+(?:Extend|Plus|Extra|XR|SR|CR|ER|DS|Max|Forte|28|21)\b.*$/i, '').trim()
-        : rootBrand || primaryRef.brandName;
-
-    const standardFormTemplates: {
-      form: MedicineCatalogItem['dosageForm'];
-      short: string;
-      strength: string;
-    }[] = [
-      { form: 'Tablet', short: 'Tab', strength: `${baseMg} mg` },
-      { form: 'Capsule', short: 'Cap', strength: `${baseMg} mg` },
-      { form: 'Syrup', short: 'Syp', strength: `100 ml (${baseMg} mg/5 ml)` },
-      { form: 'Suspension', short: 'Susp', strength: `60 ml (${baseMg} mg/5 ml)` },
-      { form: 'Drops', short: 'Drops', strength: '15 ml Paediatric Drops' },
-      { form: 'Eye Drop', short: 'Eye Drop', strength: '5 ml Eye Drop (0.5% w/v)' },
-      { form: 'Ear Drop', short: 'Ear Drop', strength: '5 ml Ear Drop (0.3% w/v)' },
-      { form: 'Nasal Drop', short: 'Nasal Drop', strength: '15 ml Nasal Drop (0.1% w/v)' },
-      { form: 'Suppository', short: 'Supp', strength: '125 mg Suppository' },
-      { form: 'Sachet', short: 'Sachet', strength: `${baseMg} mg Oral Sachet` },
-      { form: 'Inhaler', short: 'Inhaler', strength: '100 mcg/puff (200 MD)' },
-      { form: 'Injection', short: 'Inj', strength: `${baseMg} mg/vial IV Inj` },
-      { form: 'Gel', short: 'Gel/Cream', strength: '15 g Tube (1% w/w)' },
-    ];
-
-    for (let idx = 0; idx < standardFormTemplates.length; idx++) {
-      const tpl = standardFormTemplates[idx];
-      if (!presentShortForms.has(tpl.short)) {
-        const calc = calculateProportionalMedicinePrice({
-          catalog,
-          brandName: displayBrand,
-          genericName: primaryRef.genericName,
-          targetForm: tpl.form,
-          targetStrength: tpl.strength,
-          currentUnitPrice: primaryRef.unitPrice,
-        });
-        uniqueVariants.push({
-          ...primaryRef,
-          id: `${primaryRef.id}-stdform-${idx}`,
-          brandName: displayBrand,
-          dosageForm: tpl.form,
-          strength: tpl.strength,
-          purchasePrice: calc.purchasePrice,
-          unitPrice: calc.unitPrice,
-          stripPrice: calc.stripPrice,
-          packSize: calc.packSize,
-          unitsPerStrip: calc.unitsPerStrip,
-          isCoreProduct: true,
-        });
-        presentShortForms.add(tpl.short);
-      }
-    }
+  if (uniqueVariants.length === 0 && primaryRef) {
+    uniqueVariants.push(primaryRef);
   }
 
   uniqueVariants.sort((a, b) => {
@@ -5048,112 +4947,34 @@ export function searchAndRankMedicines(
 }
 
 /**
- * Guarantees that for any selected Company and/or Generic filter in the directory,
- * all 13 standard dosage forms (Tablet, Capsule, Syrup, Suspension, Sachet, Drops,
- * Eye Drop, Ear Drop, Nasal Drop, Suppository, Inhaler, Injection, Gel) are present.
+ * Filters catalog medicines by selected Company, Generic, Dosage Form, and First Letter.
+ * Returns authentic medicines matching the criteria without injecting fake dosage forms.
  */
 export function getCompleteCompanyGenericItems(params: {
   catalog: MedicineCatalogItem[];
-  selectedCompany: string;
-  selectedGeneric: string;
-  selectedDosageForm: string;
-  selectedLetter: string;
+  selectedCompany?: string;
+  selectedGeneric?: string;
+  selectedDosageForm?: string;
+  selectedLetter?: string;
 }): MedicineCatalogItem[] {
-  const { catalog, selectedCompany, selectedGeneric, selectedDosageForm, selectedLetter } = params;
-  const letter = selectedLetter === 'ALL' ? '' : selectedLetter.toLowerCase();
+  const {
+    catalog = [],
+    selectedCompany = 'ALL',
+    selectedGeneric = 'ALL',
+    selectedDosageForm = 'ALL',
+    selectedLetter = 'ALL',
+  } = params || {};
+  const letter = !selectedLetter || selectedLetter === 'ALL' ? '' : selectedLetter.toLowerCase();
   const targetShortForm =
-    selectedDosageForm === 'ALL' ? 'ALL' : getShortDosageForm(selectedDosageForm);
+    !selectedDosageForm || selectedDosageForm === 'ALL' ? 'ALL' : getShortDosageForm(selectedDosageForm);
 
-  const baseMatches = catalog.filter((m) => {
+  return catalog.filter((m) => {
     if (selectedCompany !== 'ALL' && m.companyName !== selectedCompany) return false;
     if (selectedGeneric !== 'ALL' && m.genericName !== selectedGeneric) return false;
     if (letter && !m.brandName.toLowerCase().startsWith(letter)) return false;
+    if (targetShortForm !== 'ALL' && getShortDosageForm(m.dosageForm) !== targetShortForm) return false;
     return true;
   });
-
-  // If neither a specific Company nor a specific Generic nor a specific DosageForm is selected, return baseMatches
-  if (selectedCompany === 'ALL' && selectedGeneric === 'ALL' && targetShortForm === 'ALL') {
-    return baseMatches;
-  }
-
-  // When a specific Company AND/OR Generic is selected, ensure every brand in baseMatches
-  // (or a synthesized brand if company+generic had 0 direct entries) has all 13 dosage forms!
-  if (selectedCompany !== 'ALL' || selectedGeneric !== 'ALL') {
-    const seedItems: MedicineCatalogItem[] = [...baseMatches];
-
-    if (seedItems.length === 0 && selectedCompany !== 'ALL' && selectedGeneric !== 'ALL') {
-      const genRef =
-        catalog.find((m) => m.genericName === selectedGeneric) ||
-        BD_GENERICS_DIRECTORY.find((g) => g.genericName === selectedGeneric);
-      const genClean = selectedGeneric.replace(/[^a-zA-Z]/g, '');
-      const genPrefix =
-        (genClean.slice(0, 5).charAt(0).toUpperCase() + genClean.slice(1, 5).toLowerCase()) ||
-        'Med';
-      const compWord = selectedCompany.split(/[\s-]/)[0].replace(/[^a-zA-Z]/g, '');
-      const compTag = compWord.slice(0, 3).toUpperCase() || 'BD';
-      const synthBrand = `${genPrefix}-${compTag}`;
-
-      seedItems.push({
-        id: `med-synth-${genPrefix.toLowerCase()}-${compTag.toLowerCase()}`,
-        brandName: synthBrand,
-        genericName: selectedGeneric,
-        companyName: selectedCompany,
-        strength: '20 mg',
-        dosageForm: 'Tablet',
-        packSize: '3 × 10 (30 Tablets)',
-        unitsPerStrip: 10,
-        purchasePrice: 5.28,
-        unitPrice: 6.0,
-        stripPrice: 60.0,
-        therapeuticClass: genRef?.therapeuticClass || 'General Medicine',
-        indication: genRef?.indication || 'চিকিৎসকের পরামর্শ অনুযায়ী সেব্য',
-        darNo: '214-450-62',
-        isCoreProduct: true,
-      });
-    }
-
-    // Group by brand root + company + generic so each brand family gets all 13 dosage forms
-    const brandGroups = new Map<string, MedicineCatalogItem>();
-    for (const item of seedItems) {
-      const root = getRootBrandFamily(item.brandName) || item.brandName.toLowerCase();
-      const key = `${root}__${item.companyName.toLowerCase()}__${item.genericName.toLowerCase()}`;
-      if (!brandGroups.has(key)) {
-        brandGroups.set(key, item);
-      }
-      // Cap at 60 brand groups when only company is selected so rendering stays instantaneous
-      if (selectedGeneric === 'ALL' && brandGroups.size >= 60) break;
-    }
-
-    const existingKeys = new Set<string>(
-      seedItems.map(
-        (m) =>
-          `${m.brandName.toLowerCase()}__${getShortDosageForm(m.dosageForm)}__${m.strength.toLowerCase()}`
-      )
-    );
-    const expanded: MedicineCatalogItem[] = [...seedItems];
-
-    for (const rep of brandGroups.values()) {
-      const variants = getBrandFormAndStrengthVariants(catalog, rep.brandName, rep.genericName);
-      for (const v of variants) {
-        const companyFixed: MedicineCatalogItem =
-          selectedCompany !== 'ALL' ? { ...v, companyName: selectedCompany } : v;
-        if (letter && !companyFixed.brandName.toLowerCase().startsWith(letter)) continue;
-        const vKey = `${companyFixed.brandName.toLowerCase()}__${getShortDosageForm(companyFixed.dosageForm)}__${companyFixed.strength.toLowerCase()}`;
-        if (!existingKeys.has(vKey)) {
-          existingKeys.add(vKey);
-          expanded.push(companyFixed);
-        }
-      }
-    }
-
-    if (targetShortForm !== 'ALL') {
-      return expanded.filter((m) => getShortDosageForm(m.dosageForm) === targetShortForm);
-    }
-    return expanded;
-  }
-
-  // Only targetShortForm !== 'ALL' is selected
-  return baseMatches.filter((m) => getShortDosageForm(m.dosageForm) === targetShortForm);
 }
 
 export function getInvoiceFormPrefix(form: string): string {

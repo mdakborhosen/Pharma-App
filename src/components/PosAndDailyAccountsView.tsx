@@ -6,6 +6,7 @@ import {
   FileText,
   Info,
   Minus,
+  Package,
   PackageCheck,
   PackageMinus,
   Plus,
@@ -15,6 +16,7 @@ import {
   Trash2,
   Truck,
   UserCheck,
+  X,
 } from 'lucide-react';
 import {
   BD_PHARMA_COMPANIES,
@@ -50,6 +52,8 @@ interface PosAndDailyAccountsViewProps {
   staffList: StaffMember[];
   activeStaff: StaffMember;
   onSelectActiveStaff: (staff: StaffMember) => void;
+  selectedTab?: 'sale_pos' | 'purchase_entry';
+  onTabChange?: (tab: 'sale_pos' | 'purchase_entry') => void;
   posCart: CartItem[];
   onAddToCart: (med: MedicineCatalogItem, qty: number) => void;
   onAddCustomToCart: (params: {
@@ -215,6 +219,8 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
   staffList,
   activeStaff,
   onSelectActiveStaff,
+  selectedTab,
+  onTabChange,
   posCart,
   onAddToCart,
   onAddCustomToCart,
@@ -249,7 +255,12 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
   const purCustomNameInputRef = useRef<HTMLInputElement | null>(null);
   const purCustomCostInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [entryTab, setEntryTab] = useState<'sale_pos' | 'purchase_entry'>('sale_pos');
+  const [internalTab, setInternalTab] = useState<'sale_pos' | 'purchase_entry'>('sale_pos');
+  const entryTab = selectedTab ?? internalTab;
+  const setEntryTab = (tab: 'sale_pos' | 'purchase_entry') => {
+    setInternalTab(tab);
+    onTabChange?.(tab);
+  };
   const [medSearch, setMedSearch] = useState('');
 
   // Custom Product Entry states for Sales Bill (কাস্টম প্রডাক্ট, দাম, পরিমাণ দিয়ে বিক্রয় বিল)
@@ -298,9 +309,16 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
   const [activeSearchMedId, setActiveSearchMedId] = useState<string | null>(null);
   const [activeSearchQuery, setActiveSearchQuery] = useState<string>('');
 
-  // Auto 1st line fill / open when entering purchase tab if cart is empty
+  // Auto 1st line fill / open when entering purchase tab if cart is empty (run only once safely without infinite loop)
+  const initialPurchaseBoxAddedRef = useRef(false);
   useEffect(() => {
-    if (entryTab === 'purchase_entry' && purchaseCart.length === 0 && !editingInvoiceTx) {
+    if (
+      entryTab === 'purchase_entry' &&
+      purchaseCart.length === 0 &&
+      !editingInvoiceTx &&
+      !initialPurchaseBoxAddedRef.current
+    ) {
+      initialPurchaseBoxAddedRef.current = true;
       onAddCustomToPurchaseCart({
         brandName: '',
         companyName: supplierCompany,
@@ -317,7 +335,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
         saveToCatalog: false,
       });
     }
-  }, [entryTab, purchaseCart.length, editingInvoiceTx]);
+  }, [entryTab, editingInvoiceTx]);
 
   // Daily Cashbook Filter states
   const [dateFilter, setDateFilter] = useState<string>(getTodayDateStr());
@@ -385,7 +403,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
       invoiceBuilderRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 60);
     return () => clearTimeout(timer);
-  }, [editingInvoiceTx, customers]);
+  }, [editingInvoiceTx?.id]);
 
   // Map of original quantities in the invoice currently being edited, so live stock preview is 100% accurate
   const editedOldQtyMap = useMemo(() => {
@@ -1333,9 +1351,20 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                     type="text"
                     value={medSearch}
                     onChange={(e) => setMedSearch(e.target.value)}
-                    placeholder="ওষুধের নাম লিখে সার্চ করুন (যেমন: Napa, Seclo, Noret, Femicom)..."
-                    className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-md focus:bg-white focus:border-teal-600 focus:outline-none"
+                    placeholder="ওষুধের নাম লিখে সার্চ করুন (যেমন: Napa, Seclo, Noret, Femicon)..."
+                    className="w-full pl-9 pr-8 py-2 text-sm bg-slate-50 border border-slate-200 rounded-md focus:bg-white focus:border-teal-600 focus:outline-none"
                   />
+                  {medSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setMedSearch('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-full cursor-pointer transition-colors"
+                      title="সার্চ মুছে ফেলুন"
+                      aria-label="সার্চ মুছে ফেলুন"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
                 {medSearch.trim() && (
                   <button
@@ -1411,9 +1440,19 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                           <button
                             type="button"
                             onClick={() => onAddToCart(med, med.unitsPerStrip || 10)}
-                            className="px-2 py-1 text-xs font-medium bg-teal-700 hover:bg-teal-800 text-white rounded cursor-pointer"
+                            className="px-2 py-1 text-xs font-medium bg-teal-700 hover:bg-teal-800 text-white rounded cursor-pointer flex items-center gap-1"
                           >
-                            +১ পাতা ({med.unitsPerStrip || 10})
+                            <ShoppingCart className="w-3 h-3" />
+                            +১ পাতা
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onAddToPurchaseCart(med, med.unitsPerStrip || 10)}
+                            title="ক্রয় কার্ট / Purchase Cart-এ যোগ করুন"
+                            className="px-2 py-1 text-xs font-semibold bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 rounded cursor-pointer flex items-center gap-1"
+                          >
+                            <Package className="w-3 h-3 text-indigo-700" />
+                            +ক্রয়
                           </button>
                         </div>
                       </div>
@@ -2189,11 +2228,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                                     }
                                   }}
                                   onBlur={() => {
-                                    if (item.brandName.trim()) {
-                                      setTimeout(() => {
-                                        ensureNextPurchaseBoxOpen(idx);
-                                      }, 250);
-                                    }
+                                    // Do not auto-open extra rows on simple blur to prevent race conditions & duplicate blank boxes
                                   }}
                                   placeholder="ওষুধের নাম লিখুন বা লিস্ট থেকে সিলেক্ট করুন (যেমন: Napa, Seclo)..."
                                   className="w-full px-2.5 py-1.5 text-xs font-bold text-slate-900 bg-white border border-slate-300 rounded focus:border-indigo-600 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
