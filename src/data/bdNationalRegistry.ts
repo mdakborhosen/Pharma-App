@@ -2871,32 +2871,12 @@ export function buildNationalMedicineDatabase(
     existingBrandKeys.add(`${bLow}__${fLow}__${pNum}`);
   }
 
-  // Helper that ensures every generic blueprint includes the full spectrum of dosage forms
-  // (Tablet, Capsule, Syrup, Suspension, Sachet, Drops, Eye Drop, Ear Drop, Nasal Drop, Suppository, Inhaler, Injection, Gel)
+  // Authentic brand expansion: use only the genuine clinical strengths defined in the generic blueprint
   const buildFullFormStrengthsForBlueprint = (bp: GenericMetaSeed): string[] => {
-    const baseMg = parsePrimaryNumber(bp.defaultStrengths[0]) || 20;
-    const universalForms = [
-      ...bp.defaultStrengths,
-      `${baseMg} mg Tab`,
-      `${baseMg} mg Cap`,
-      `60 ml Syrup (${baseMg} mg/5 ml)`,
-      `100 ml Syrup (${baseMg} mg/5 ml)`,
-      `50 ml Suspension (${baseMg} mg/5 ml)`,
-      `${baseMg} mg Sachet`,
-      `15 ml Paediatric Drops`,
-      `5 ml Eye Drop (0.5% w/v)`,
-      `5 ml Ear Drop (0.3% w/v)`,
-      `15 ml Nasal Drop (0.1% w/v)`,
-      `125 mg Suppository`,
-      `250 mg Suppository`,
-      `100 mcg/puff Inhaler (200 MD)`,
-      `${baseMg} mg IV Inj`,
-      `15 g Cream/Gel (1% w/w)`,
-    ];
-    return Array.from(new Set(universalForms));
+    return bp.defaultStrengths;
   };
 
-  // 3. Expand Core Generic Blueprints across all dosage forms & strengths for every verified Brand-to-Company pairing
+  // 3. Expand Core Generic Blueprints across authentic dosage forms & strengths for every verified Brand-to-Company pairing
   let seq = 1;
   for (const bp of CORE_GENERIC_BLUEPRINTS) {
     const gEntry = genericMap.get(bp.genericName.toLowerCase())!;
@@ -2947,6 +2927,11 @@ export function buildNationalMedicineDatabase(
             : sLower.includes('tab') || sLower.includes('mups') || sLower.includes('xr') || sLower.includes('sr') || sLower.includes('chew') || sLower.includes('pills') || sLower.includes('cycle')
             ? 'Tablet'
             : vb.form || bp.defaultForm;
+
+        // If this verified brand has a specific form explicitly designated, only keep strengths matching that form
+        if (vb.form && resolvedForm !== vb.form) {
+          continue;
+        }
 
         const curNum = parsePrimaryNumber(rawStrength);
         const bLow = brandName.toLowerCase();
@@ -3090,7 +3075,7 @@ export function buildNationalMedicineDatabase(
           darNo: `${String((vIdx % 250) + 10).padStart(3, '0')}-${String(
             (seq % 899) + 100
           )}-${String((vIdx % 89) + 10)}`,
-          availableDosages: fullStrengthsList.slice(0, 10).join(', '),
+          availableDosages: bp.defaultStrengths.slice(0, 10).join(', '),
           isCoreProduct: true,
         });
 
