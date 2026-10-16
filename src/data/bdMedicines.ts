@@ -5022,14 +5022,26 @@ export function formatPurchaseItemInvoiceLine(
     updateStock?: boolean;
     packUnit?: string;
     packCount?: number;
+    packRate?: number;
     unitsPerPack?: number;
     packDetailFormula?: string;
   },
   index: number
 ): string {
   const prefix = getInvoiceFormPrefix(item.dosageForm);
+  const isPack = Boolean(
+    item.packUnit &&
+    item.packUnit !== 'piece' &&
+    item.packCount &&
+    item.packCount > 0 &&
+    item.packRate &&
+    item.packRate > 0
+  );
+  const exactLineTotal = isPack
+    ? Number((item.packRate! * item.packCount!).toFixed(2))
+    : Number((item.purchasePrice * item.qty).toFixed(2));
   const unitStr = formatCleanMoney(item.purchasePrice);
-  const totalStr = formatCleanMoney(item.purchasePrice * item.qty);
+  const totalStr = formatCleanMoney(exactLineTotal);
   const cleanBrand = (item.brandName || 'Custom Product').trim();
   const cleanStrength =
     item.strength && item.strength.trim() !== 'Standard' ? item.strength.trim() : '';
@@ -5039,6 +5051,7 @@ export function formatPurchaseItemInvoiceLine(
   let packDetail = '';
   if (item.packUnit && item.packUnit !== 'piece' && item.packCount && item.packCount > 0) {
     const unitLabel = item.packUnit === 'strip' ? 'পাতা' : item.packUnit === 'box' ? 'বক্স' : 'কার্টুন';
+    const rateTag = item.packRate && item.packRate > 0 ? ` @৳${formatCleanMoney(item.packRate)}/দর` : '';
     const formulaStr = item.packDetailFormula
       ? ` (${item.packDetailFormula})`
       : item.packUnit === 'strip'
@@ -5046,7 +5059,7 @@ export function formatPurchaseItemInvoiceLine(
       : item.packUnit === 'box'
       ? ` (${item.unitsPerPack || 510} পিস)`
       : ` (১*${item.unitsPerPack || 48})`;
-    packDetail = ` [${item.packCount} ${unitLabel}${formulaStr}]`;
+    packDetail = ` [${item.packCount} ${unitLabel}${formulaStr}${rateTag}]`;
   } else if (item.packUnit === 'piece' && item.packCount) {
     packDetail = ` [${item.qty} পিস]`;
   }

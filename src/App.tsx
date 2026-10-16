@@ -3067,7 +3067,20 @@ export default function App() {
       : undefined;
 
     const subTotal = sanitizeNumber(
-      purchaseCart.reduce((acc, i) => acc + i.purchasePrice * i.qty, 0)
+      purchaseCart.reduce((acc, i) => {
+        const isPack = Boolean(
+          i.packUnit &&
+          i.packUnit !== 'piece' &&
+          i.packCount &&
+          i.packCount > 0 &&
+          i.packRate &&
+          i.packRate > 0
+        );
+        const lineCost = isPack
+          ? Number((i.packRate! * i.packCount!).toFixed(2))
+          : Number((i.purchasePrice * i.qty).toFixed(2));
+        return acc + lineCost;
+      }, 0)
     );
     const discount = sanitizeNumber(params.discount, 0, subTotal);
     const grandTotal = sanitizeNumber(subTotal - discount);

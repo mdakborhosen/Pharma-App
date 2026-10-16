@@ -510,7 +510,20 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
 
   // Purchase Invoice calculations
   const purchaseSubTotal = useMemo(() => {
-    return purchaseCart.reduce((acc, item) => acc + item.purchasePrice * item.qty, 0);
+    return purchaseCart.reduce((acc, item) => {
+      const isPack = Boolean(
+        item.packUnit &&
+        item.packUnit !== 'piece' &&
+        item.packCount &&
+        item.packCount > 0 &&
+        item.packRate &&
+        item.packRate > 0
+      );
+      const lineCost = isPack
+        ? Number((item.packRate! * item.packCount!).toFixed(2))
+        : Number((item.purchasePrice * item.qty).toFixed(2));
+      return acc + lineCost;
+    }, 0);
   }, [purchaseCart]);
 
   const totalPurchaseUnits = useMemo(() => {
@@ -850,7 +863,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
 
     if (opts?.packRate !== undefined) {
       finalPackRate = opts.packRate;
-      finalPurPrice = packUnit === 'piece' ? opts.packRate : Number((opts.packRate / unitsPerPack).toFixed(2));
+      finalPurPrice = packUnit === 'piece' ? opts.packRate : opts.packRate / unitsPerPack;
     } else if (opts?.purchasePrice !== undefined) {
       finalPurPrice = opts.purchasePrice;
       finalPackRate = packUnit === 'piece' ? opts.purchasePrice : Number((opts.purchasePrice * unitsPerPack).toFixed(2));
@@ -2158,7 +2171,17 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                   </thead>
                   <tbody className="divide-y divide-slate-200">
                     {purchaseCart.map((item, idx) => {
-                      const lineTotal = item.purchasePrice * item.qty;
+                      const isPackRow = Boolean(
+                        item.packUnit &&
+                        item.packUnit !== 'piece' &&
+                        item.packCount &&
+                        item.packCount > 0 &&
+                        item.packRate &&
+                        item.packRate > 0
+                      );
+                      const lineTotal = isPackRow
+                        ? Number((item.packRate! * item.packCount!).toFixed(2))
+                        : Number((item.purchasePrice * item.qty).toFixed(2));
                       const rawCurrentStock = getStockForMed(item);
                       const oldPurQty = isEditingPurchase ? getOldEditedQtyForMed(item) : 0;
                       const currentStock = Math.max(0, rawCurrentStock - oldPurQty);
@@ -2848,7 +2871,19 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                               ৳{formatCleanMoney(lineTotal)}
                             </div>
                             <div className="text-[10px] font-mono text-slate-500 mt-0.5">
-                              {item.qty} পিস × ৳{formatCleanMoney(item.purchasePrice)}
+                              {isPackRow ? (
+                                <span>
+                                  {item.packCount}{' '}
+                                  {item.packUnit === 'strip'
+                                    ? 'পাতা'
+                                    : item.packUnit === 'box'
+                                    ? 'বক্স'
+                                    : 'কার্টুন'}{' '}
+                                  ({item.qty} পিস)
+                                </span>
+                              ) : (
+                                <span>{item.qty} পিস × ৳{formatCleanMoney(item.purchasePrice)}</span>
+                              )}
                             </div>
                           </td>
 
