@@ -4677,27 +4677,12 @@ export default function App() {
                   >
                     <span className="flex items-center gap-2.5 truncate">
                       <Icon className="w-4 h-4 shrink-0" />
-                      <span className="truncate">{item.label}</span>
-                    </span>
-                    {item.id === 'pos_accounts' && posCart.length > 0 && (
-                      <span className="font-mono tabular-nums text-xs px-1.5 py-0.5 rounded bg-teal-600 text-white">
-                        {posCart.length}
-                      </span>
-                    )}
-                    {item.id === 'compare' && unreadAlertsCount > 0 && (
-                      <span className="font-mono tabular-nums text-xs px-1.5 py-0.5 rounded bg-amber-500 text-white">
-                        {unreadAlertsCount}
-                      // ✅ সঠিক কোড (Matched tags)
-<span>
+                      <span>
   <button>
-    ...
+    {unreadAlertsCount}
   </button>
 </span>
-</div>
-</header>
-              <select
-                value={activeStaff.id}
-                onChange={(e) => {
+</div> {/* এখানে অতিরিক্ত কোনো div বা ট্যাগ থাকলে তা মিলিয়ে নিন */}
                   const found = staffList.find((s) => s.id === e.target.value);
                   if (found) {
                     setActiveStaff(found);
