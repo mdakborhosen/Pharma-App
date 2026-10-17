@@ -4687,17 +4687,14 @@ export default function App() {
                     {item.id === 'compare' && unreadAlertsCount > 0 && (
                       <span className="font-mono tabular-nums text-xs px-1.5 py-0.5 rounded bg-amber-500 text-white">
                         {unreadAlertsCount}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
-              <div className="text-xs font-semibold text-slate-700">
-                সক্রিয় অপারেটর (Owner / স্টাফ)
-              </div>
+                      // ✅ সঠিক কোড (Matched tags)
+<span>
+  <button>
+    ...
+  </button>
+</span>
+</div>
+</header>
               <select
                 value={activeStaff.id}
                 onChange={(e) => {
