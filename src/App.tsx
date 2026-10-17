@@ -17,8 +17,10 @@ import {
 import {
   ArrowRightLeft,
   BellRing,
+  BarChart3,
   BookOpen,
   Boxes,
+  Camera,
   Check,
   Cloud,
   Copy,
@@ -27,12 +29,15 @@ import {
   Eye,
   EyeOff,
   Key,
+  LayoutDashboard,
   Link2,
+  ListFilter,
   Lock,
   LogIn,
   LogOut,
   Menu,
   Package,
+  Settings,
   Unlock,
   ShieldCheck,
   ShoppingCart,
@@ -43,7 +48,9 @@ import {
   WifiOff,
   X,
 } from 'lucide-react';
+import { BoxScannerModal, ScannedBoxData } from './components/BoxScannerModal';
 import { CustomerLedgerView } from './components/CustomerLedgerView';
+import { DashboardView } from './components/DashboardView';
 import { InventoryView } from './components/InventoryView';
 import { MedicineCompareView } from './components/MedicineCompareView';
 import { PosAndDailyAccountsView } from './components/PosAndDailyAccountsView';
@@ -121,6 +128,7 @@ import {
 } from './utils/persistentStorage';
 
 type ActiveSection =
+  | 'dashboard'
   | 'compare'
   | 'pos_accounts'
   | 'inventory'
@@ -483,11 +491,12 @@ export default function App() {
   const [registerPhone, setRegisterPhone] = useState('01812-358839');
   const [registerPassword, setRegisterPassword] = useState('');
   const [showRegisterPassword, setShowRegisterPassword] = useState(false);
-  const [activeSection, setActiveSection] = useState<ActiveSection>('compare');
+  const [activeSection, setActiveSection] = useState<ActiveSection>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [seedingCloud, setSeedingCloud] = useState(false);
   const [showIOSInstallModal, setShowIOSInstallModal] = useState(false);
+  const [showScannerModal, setShowScannerModal] = useState(false);
 
   const isLoggedOutExplicitly =
     typeof window !== 'undefined' &&
@@ -2511,12 +2520,13 @@ export default function App() {
     stripsPerBox?: number;
     pcsPerStrip?: number;
   }) => {
-    const cleanBrand = params.brandName.trim() || 'কাস্টম প্রডাক্ট';
+    const isBlank = !params.brandName.trim();
+    const cleanBrand = params.brandName.trim();
     const cleanStrength = (params.strength || '').trim();
     const cleanForm = (params.dosageForm || 'Tablet').trim();
-    const cleanGeneric = (params.genericName || cleanBrand).trim();
+    const cleanGeneric = (params.genericName || cleanBrand || 'Custom Product').trim();
     const cleanCompany = (params.companyName || 'Custom / General').trim();
-    const purchasePrice = Math.max(0.01, Number(params.purchasePrice) || 8.8);
+    const purchasePrice = isBlank ? 0 : Math.max(0.01, Number(params.purchasePrice) || 8.8);
     const unitPrice =
       typeof params.unitPrice === 'number' && params.unitPrice > 0
         ? params.unitPrice
@@ -2527,22 +2537,56 @@ export default function App() {
     const expiryDate = (params.expiryDate || '').trim() || '2028-06-30';
     const updateStock = params.updateStock !== false;
 
-    const slug = `${cleanBrand}-${cleanStrength}-${cleanForm}`
-      .toLowerCase()
-      .replace(/[^a-z0-9\u0980-\u09ff]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 40);
-    const customMedId = `custom_pur_${slug || Date.now()}`;
-
-    const invMatch = findMatchingInventoryRecord(inventory, {
-      medicineId: customMedId,
-      brandName: cleanBrand,
-      strength: cleanStrength,
-      dosageForm: cleanForm,
-    });
-    const currentStock = invMatch ? invMatch.stockQty : 0;
-
     setPurchaseCart((prev) => {
+      if (isBlank) {
+        // If the cart already ends with an empty row, keep it and don't duplicate
+        const last = prev[prev.length - 1];
+        if (last && !last.brandName.trim()) {
+          return prev;
+        }
+        const blankRow: PurchaseCartItem = {
+          medicineId: `box_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          brandName: '',
+          genericName: cleanGeneric,
+          companyName: cleanCompany,
+          strength: '',
+          dosageForm: cleanForm,
+          packSize: params.packDetailFormula || '1*10',
+          purchasePrice: 0,
+          unitPrice: 0,
+          qty: 10,
+          batchNo: `B-${Math.floor(1000 + Math.random() * 9000)}`,
+          expiryDate: '2028-06-30',
+          availableStock: 0,
+          updateStock: true,
+          packUnit: params.packUnit || 'strip',
+          packCount: 1,
+          unitsPerPack: 10,
+          packRate: 0,
+          packDetailFormula: '1*10',
+          stripsPerBox: 10,
+          pcsPerStrip: 10,
+        };
+        const next = [...prev, blankRow];
+        saveLocal(STORAGE_KEYS.PURCHASE_CART, next);
+        return next;
+      }
+
+      const slug = `${cleanBrand}-${cleanStrength}-${cleanForm}`
+        .toLowerCase()
+        .replace(/[^a-z0-9\u0980-\u09ff]+/g, '-')
+        .replace(/^-|-$/g, '')
+        .slice(0, 40);
+      const customMedId = `custom_pur_${slug || Date.now()}`;
+
+      const invMatch = findMatchingInventoryRecord(inventory, {
+        medicineId: customMedId,
+        brandName: cleanBrand,
+        strength: cleanStrength,
+        dosageForm: cleanForm,
+      });
+      const currentStock = invMatch ? invMatch.stockQty : 0;
+
       const existing = prev.find(
         (item) =>
           item.medicineId === customMedId ||
@@ -2550,53 +2594,90 @@ export default function App() {
             item.strength.trim().toLowerCase() === cleanStrength.toLowerCase() &&
             item.dosageForm.trim().toLowerCase() === cleanForm.toLowerCase())
       );
-      const next = existing
-        ? prev.map((item) =>
-            item.medicineId === existing.medicineId
-              ? {
-                  ...item,
-                  purchasePrice,
-                  unitPrice,
-                  qty: item.qty + qty,
-                  batchNo: batchNo || item.batchNo,
-                  updateStock,
-                  packUnit: params.packUnit || item.packUnit,
-                  packCount: params.packCount || item.packCount,
-                  unitsPerPack: params.unitsPerPack || item.unitsPerPack,
-                  packRate: params.packRate || item.packRate,
-                  packDetailFormula: params.packDetailFormula || item.packDetailFormula,
-                  stripsPerBox: params.stripsPerBox || item.stripsPerBox,
-                  pcsPerStrip: params.pcsPerStrip || item.pcsPerStrip,
-                }
-              : item
-          )
-        : [
-            ...prev,
-            {
-              medicineId: invMatch?.medicineId || customMedId,
-              inventoryId: invMatch?.id,
-              brandName: cleanBrand,
-              genericName: cleanGeneric,
-              companyName: cleanCompany,
-              strength: cleanStrength,
-              dosageForm: cleanForm,
-              packSize: params.packDetailFormula || '10 × 10 (100 pcs)',
-              purchasePrice,
-              unitPrice,
-              qty,
-              batchNo,
-              expiryDate,
-              availableStock: currentStock,
-              updateStock,
-              packUnit: params.packUnit || 'piece',
-              packCount: params.packCount || 1,
-              unitsPerPack: params.unitsPerPack,
-              packRate: params.packRate,
-              packDetailFormula: params.packDetailFormula,
-              stripsPerBox: params.stripsPerBox,
-              pcsPerStrip: params.pcsPerStrip,
-            },
-          ];
+      let next: PurchaseCartItem[];
+      const newItem: PurchaseCartItem = {
+        medicineId: invMatch?.medicineId || customMedId,
+        inventoryId: invMatch?.id,
+        brandName: cleanBrand,
+        genericName: cleanGeneric,
+        companyName: cleanCompany,
+        strength: cleanStrength,
+        dosageForm: cleanForm,
+        packSize: params.packDetailFormula || '10 × 10 (100 pcs)',
+        purchasePrice,
+        unitPrice,
+        qty,
+        batchNo,
+        expiryDate,
+        availableStock: currentStock,
+        updateStock,
+        packUnit: params.packUnit || 'piece',
+        packCount: params.packCount || 1,
+        unitsPerPack: params.unitsPerPack,
+        packRate: params.packRate,
+        packDetailFormula: params.packDetailFormula,
+        stripsPerBox: params.stripsPerBox,
+        pcsPerStrip: params.pcsPerStrip,
+      };
+
+      if (existing) {
+        next = prev.map((item) =>
+          item.medicineId === existing.medicineId
+            ? {
+                ...item,
+                purchasePrice,
+                unitPrice,
+                qty: item.qty + qty,
+                batchNo: batchNo || item.batchNo,
+                updateStock,
+                packUnit: params.packUnit || item.packUnit,
+                packCount: params.packCount || item.packCount,
+                unitsPerPack: params.unitsPerPack || item.unitsPerPack,
+                packRate: params.packRate || item.packRate,
+                packDetailFormula: params.packDetailFormula || item.packDetailFormula,
+                stripsPerBox: params.stripsPerBox || item.stripsPerBox,
+                pcsPerStrip: params.pcsPerStrip || item.pcsPerStrip,
+              }
+            : item
+        );
+      } else {
+        const last = prev[prev.length - 1];
+        if (last && !last.brandName.trim()) {
+          next = [...prev.slice(0, -1), newItem];
+        } else {
+          next = [...prev, newItem];
+        }
+      }
+
+      // Auto ensure next purchase box is open
+      const hasTrailingBlank = next.length > 0 && !next[next.length - 1].brandName.trim();
+      if (!hasTrailingBlank) {
+        const nextBlankRow: PurchaseCartItem = {
+          medicineId: `box_${Date.now() + 1}_${Math.random().toString(36).slice(2, 7)}`,
+          brandName: '',
+          genericName: cleanGeneric,
+          companyName: cleanCompany,
+          strength: '',
+          dosageForm: 'Tablet',
+          packSize: '1*10',
+          purchasePrice: 0,
+          unitPrice: 0,
+          qty: 10,
+          batchNo: `B-${Math.floor(1000 + Math.random() * 9000)}`,
+          expiryDate: '2028-06-30',
+          availableStock: 0,
+          updateStock: true,
+          packUnit: 'strip',
+          packCount: 1,
+          unitsPerPack: 10,
+          packRate: 0,
+          packDetailFormula: '1*10',
+          stripsPerBox: 10,
+          pcsPerStrip: 10,
+        };
+        next = [...next, nextBlankRow];
+      }
+
       saveLocal(STORAGE_KEYS.PURCHASE_CART, next);
       return next;
     });
@@ -2701,6 +2782,7 @@ export default function App() {
       saveLocal(STORAGE_KEYS.POS_CART, saleItems);
       setEditingInvoiceTx(tx);
       setActiveSection('pos_accounts');
+      setPosActiveTab('sale_pos');
       showToast(
         `বিক্রয় ইনভয়েস (${tx.invoiceNo}) নতুন ইনভয়েস তৈরির প্যানেলে এডিটের জন্য লোড হয়েছে!`
       );
@@ -2710,6 +2792,7 @@ export default function App() {
       saveLocal(STORAGE_KEYS.PURCHASE_CART, purItems);
       setEditingInvoiceTx(tx);
       setActiveSection('pos_accounts');
+      setPosActiveTab('purchase_entry');
       showToast(
         `ক্রয় ইনভয়েস (${tx.invoiceNo}) নতুন ক্রয় ইনভয়েস তৈরির প্যানেলে এডিটের জন্য লোড হয়েছে!`
       );
@@ -3068,16 +3151,16 @@ export default function App() {
 
     const subTotal = sanitizeNumber(
       purchaseCart.reduce((acc, i) => {
-        const isPack = Boolean(
-          i.packUnit &&
-          i.packUnit !== 'piece' &&
-          i.packCount &&
-          i.packCount > 0 &&
-          i.packRate &&
-          i.packRate > 0
-        );
+        const effPackRate =
+          i.packRate && i.packRate > 0
+            ? i.packRate
+            : i.purchasePrice > 0
+            ? Number((i.purchasePrice * (i.unitsPerPack || 1)).toFixed(2))
+            : 0;
+        const count = Math.max(1, i.packCount || 1);
+        const isPack = Boolean(i.packUnit && i.packUnit !== 'piece' && effPackRate > 0);
         const lineCost = isPack
-          ? Number((i.packRate! * i.packCount!).toFixed(2))
+          ? Number((effPackRate * count).toFixed(2))
           : Number((i.purchasePrice * i.qty).toFixed(2));
         return acc + lineCost;
       }, 0)
@@ -4395,6 +4478,12 @@ export default function App() {
     icon: React.FC<{ className?: string }>;
   }[] = [
     {
+      id: 'dashboard',
+      label: 'ফার্মেসী ড্যাশবোর্ড ও ওভারভিউ',
+      shortLabel: 'ড্যাশবোর্ড',
+      icon: LayoutDashboard,
+    },
+    {
       id: 'compare',
       label: 'ওষুধের মূল্য, অ্যালার্ট ও তুলনা',
       shortLabel: 'মূল্য ও অ্যালার্ট',
@@ -4430,8 +4519,8 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
-      {/* Top Bar Contract: 3 Zones separated by gap-8 */}
-      <header className="sticky top-0 z-30 bg-white border-b border-slate-200 px-6 py-3.5 flex items-center justify-between gap-8 no-print">
+      {/* Top Bar: Clean header with both carts */}
+      <header className="sticky top-0 z-30 bg-white border-b border-slate-200 px-3 sm:px-6 py-2.5 sm:py-3 flex items-center justify-between gap-2 sm:gap-6 no-print overflow-x-hidden">
         {/* Zone 1: Single text element wordmark */}
         <div className="flex items-center gap-3 shrink-0">
           <button
@@ -4446,15 +4535,21 @@ export default function App() {
             href="#top"
             onClick={(e) => {
               e.preventDefault();
-              setActiveSection('compare');
+              setActiveSection('dashboard');
             }}
-            className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
+            className="flex items-center gap-2.5 text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
           >
-            ইকবাল ফার্মেসী
+            <div className="w-8 h-8 rounded-lg bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <div className="relative flex items-center justify-center">
+                <div className="w-4 h-1.5 bg-white rounded-xs"></div>
+                <div className="w-1.5 h-4 bg-white rounded-xs absolute"></div>
+              </div>
+            </div>
+            <span>ইকবাল ফার্মেসী</span>
           </a>
         </div>
 
-        {/* Zone 2: 5 concise single-line text navigation links */}
+        {/* Zone 2: 6 concise single-line text navigation links */}
         <nav className="hidden lg:flex items-center gap-6 text-sm font-medium text-slate-600">
           {navItems.map((item) => {
             const isActive = activeSection === item.id;
@@ -4483,7 +4578,7 @@ export default function App() {
 
         {/* Zone 3: Cart Quick Action Buttons & Cloud Authentication */}
         <div className="flex items-center gap-2 shrink-0">
-          {/* Purchase Cart (ক্রয় কার্ট) Header Button */}
+          {/* Purchase Cart (ক্রয় কার্ট) Header Button - Visible Everywhere */}
           <button
             type="button"
             onClick={() => {
@@ -4491,7 +4586,7 @@ export default function App() {
               setPosActiveTab('purchase_entry');
               showToast('ক্রয় কার্ট ও ইনভয়েস বিল এন্ট্রি খোলা হয়েছে');
             }}
-            className={`px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-md border transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer shadow-2xs hover:shadow-xs active:scale-95 ${
+            className={`px-2 sm:px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer shadow-2xs hover:shadow-xs active:scale-95 ${
               activeSection === 'pos_accounts' && posActiveTab === 'purchase_entry'
                 ? 'bg-indigo-600 text-white border-indigo-700 font-bold'
                 : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border-indigo-200'
@@ -4502,7 +4597,8 @@ export default function App() {
             <Package className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${
               activeSection === 'pos_accounts' && posActiveTab === 'purchase_entry' ? 'text-white' : 'text-indigo-700'
             }`} />
-            <span className="font-bold">ক্রয় কার্ট</span>
+            <span className="font-bold hidden sm:inline">ক্রয় কার্ট</span>
+            <span className="font-bold sm:hidden">ক্রয়</span>
             <span className={`px-1.5 py-0.2 text-[11px] font-mono font-bold rounded-full min-w-4 text-center leading-tight ${
               activeSection === 'pos_accounts' && posActiveTab === 'purchase_entry'
                 ? 'bg-white text-indigo-800'
@@ -4512,7 +4608,7 @@ export default function App() {
             </span>
           </button>
 
-          {/* Sell Cart (বিক্রয় কার্ট) Header Button */}
+          {/* Sell Cart (বিক্রয় কার্ট) Header Button - Visible Everywhere */}
           <button
             type="button"
             onClick={() => {
@@ -4520,7 +4616,7 @@ export default function App() {
               setPosActiveTab('sale_pos');
               showToast('বিক্রয় কার্ট ও ক্যাশ মেমো খোলা হয়েছে');
             }}
-            className={`px-2.5 sm:px-3 py-1.5 text-xs font-semibold rounded-md border transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer shadow-2xs hover:shadow-xs active:scale-95 ${
+            className={`px-2 sm:px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer shadow-2xs hover:shadow-xs active:scale-95 ${
               activeSection === 'pos_accounts' && posActiveTab === 'sale_pos'
                 ? 'bg-emerald-600 text-white border-emerald-700 font-bold'
                 : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border-emerald-300'
@@ -4531,18 +4627,38 @@ export default function App() {
             <ShoppingCart className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${
               activeSection === 'pos_accounts' && posActiveTab === 'sale_pos' ? 'text-white' : 'text-emerald-700'
             }`} />
-            <span className="font-bold">বিক্রয় কার্ট</span>
+            <span className="font-bold hidden sm:inline">বিক্রয় কার্ট</span>
+            <span className="font-bold sm:hidden">বিক্রয়</span>
             <span className={`px-1.5 py-0.2 text-[11px] font-mono font-bold rounded-full min-w-4 text-center leading-tight ${
               activeSection === 'pos_accounts' && posActiveTab === 'sale_pos'
                 ? 'bg-white text-emerald-800'
                 : 'bg-emerald-600 text-white'
             }`}>
-              {posCart.length}
-            </span>
+          {/* Box Scanner Button (স্ক্যান আইকন) */}
+          <button
+            type="button"
+            onClick={() => setShowScannerModal(true)}
+            className="px-2 sm:px-2.5 py-1.5 text-xs font-semibold rounded-lg border border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-900 transition-all flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer shadow-2xs hover:shadow-xs active:scale-95"
+            title="ওষুধের বক্স স্ক্যান করুন: নাম, বক্স সাইজ, দাম, ব্যাচ নম্বর ও মেয়াদ উত্তীর্ণের তারিখ"
+            aria-label="স্ক্যান"
+          >
+            <Camera className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-purple-700" />
+            <span className="font-bold hidden sm:inline">স্ক্যান</span>
+          </button>
+
+          {/* Settings Button matching user mockup */}
+          <button
+            type="button"
+            onClick={() => setActiveSection('staff_shop')}
+            className="p-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors flex items-center justify-center cursor-pointer shrink-0"
+            title="ফার্মেসী সেটিংস ও স্টাফ"
+            aria-label="সেটিংস"
+          >
+            <Settings className="w-5 h-5 text-slate-700" />
           </button>
 
           {isCloudLoggedIn ? (
-            <>
+            <div className="hidden md:flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => setShowCloudLoginModal(true)}
@@ -4558,19 +4674,17 @@ export default function App() {
                 className="px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <LogOut className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">লগআউট ({getOperatorName(activeStaff)})</span>
-                <span className="sm:hidden">লগআউট</span>
+                <span>লগআউট ({getOperatorName(activeStaff)})</span>
               </button>
-            </>
+            </div>
           ) : (
             <button
               type="button"
               onClick={() => setShowCloudLoginModal(true)}
-              className="px-3 sm:px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+              className="hidden md:flex px-3 sm:px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-md transition-colors items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <LogIn className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">দোকান ক্লাউড লগইন</span>
-              <span className="sm:hidden">লগইন</span>
+              <span>দোকান ক্লাউড লগইন</span>
             </button>
           )}
         </div>
@@ -4621,7 +4735,7 @@ export default function App() {
                 ঠিকানা:- {shopProfile.address}
               </div>
               <div className="text-xs text-slate-700 font-mono">
-                মোবাই:- {shopProfile.phone}
+                মোবাইল:- {shopProfile.phone}
               </div>
             </div>
 
@@ -4771,7 +4885,7 @@ export default function App() {
         </aside>
 
         {/* Main Workspace Canvas */}
-        <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 max-w-[1440px] mx-auto w-full">
+        <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 max-w-[1440px] mx-auto w-full pb-24 lg:pb-8">
 
           {/* Offline Connectivity Banner */}
           {!isOnline && (
@@ -5057,6 +5171,23 @@ export default function App() {
           ) : (
             <>
               {/* Active View Render */}
+              {activeSection === 'dashboard' && (
+                <DashboardView
+                  transactions={transactions}
+                  inventory={inventory}
+                  customers={customers}
+                  catalog={fullCatalog}
+                  posCart={posCart}
+                  purchaseCart={purchaseCart}
+                  shopProfile={shopProfile}
+                  onNavigate={(sec, subTab) => {
+                    setActiveSection(sec);
+                    if (subTab) setPosActiveTab(subTab as any);
+                  }}
+                  onOpenScanner={() => setShowScannerModal(true)}
+                />
+              )}
+
               {activeSection === 'compare' && (
                 <MedicineCompareView
                   catalog={fullCatalog}
@@ -5576,6 +5707,129 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Mobile Fixed Bottom Navigation Bar matching user mockup ("ড্যাশবোর্ড", "তালিকা", "বিক্রি", "প্রতিবেদন", "একাউন্ট") */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-slate-200 py-1.5 px-3 flex items-center justify-around shadow-lg no-print select-none">
+        {/* 1. ড্যাশবোর্ড */}
+        <button
+          type="button"
+          onClick={() => setActiveSection('dashboard')}
+          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-lg cursor-pointer transition-colors ${
+            activeSection === 'dashboard'
+              ? 'text-sky-600 font-bold'
+              : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <LayoutDashboard className="w-5 h-5 mb-0.5" />
+          <span className="text-[10px] leading-tight">ড্যাশবোর্ড</span>
+        </button>
+
+        {/* 2. তালিকা */}
+        <button
+          type="button"
+          onClick={() => setActiveSection('compare')}
+          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-lg cursor-pointer transition-colors ${
+            activeSection === 'compare'
+              ? 'text-sky-600 font-bold'
+              : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <ListFilter className="w-5 h-5 mb-0.5" />
+          <span className="text-[10px] leading-tight">তালিকা</span>
+        </button>
+
+        {/* 3. বিক্রি (with Cart Badge & Cart Icon) */}
+        <button
+          type="button"
+          onClick={() => {
+            setActiveSection('pos_accounts');
+            setPosActiveTab('sale_pos');
+          }}
+          className={`relative flex flex-col items-center justify-center py-1 px-2.5 rounded-lg cursor-pointer transition-colors ${
+            activeSection === 'pos_accounts' && posActiveTab === 'sale_pos'
+              ? 'text-sky-600 font-bold'
+              : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <div className="relative">
+            <ShoppingCart className="w-5 h-5 mb-0.5" />
+            {posCart.length > 0 && (
+              <span className="absolute -top-1.5 -right-2 px-1 py-0.2 rounded-full text-[9px] font-mono font-bold bg-emerald-600 text-white min-w-3 text-center leading-tight">
+                {posCart.length}
+              </span>
+            )}
+          </div>
+          <span className="text-[10px] leading-tight">বিক্রি</span>
+        </button>
+
+        {/* 4. প্রতিবেদন / কাস্টমার ও বিক্রয় লেজার */}
+        <button
+          type="button"
+          onClick={() => {
+            setActiveSection('customer_ledger');
+          }}
+          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-lg cursor-pointer transition-colors ${
+            activeSection === 'customer_ledger'
+              ? 'text-sky-600 font-bold'
+              : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <BarChart3 className="w-5 h-5 mb-0.5" />
+          <span className="text-[10px] leading-tight">প্রতিবেদন</span>
+        </button>
+
+        {/* 5. একাউন্ট */}
+        <button
+          type="button"
+          onClick={() => setActiveSection('staff_shop')}
+          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-lg cursor-pointer transition-colors ${
+            activeSection === 'staff_shop'
+              ? 'text-sky-600 font-bold'
+              : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Users className="w-5 h-5 mb-0.5" />
+          <span className="text-[10px] leading-tight">একাউন্ট</span>
+        </button>
+      </nav>
+
+      {/* Medicine Box Scanner Modal (নাম, বক্স সাইজ, দাম, ব্যাচ, মেয়াদ স্ক্যানার) */}
+      <BoxScannerModal
+        isOpen={showScannerModal}
+        onClose={() => setShowScannerModal(false)}
+        catalog={fullCatalog}
+        onAddToPurchase={(data) => {
+          handleAddCustomToPurchaseCart({
+            brandName: data.brandName,
+            packDetailFormula: data.boxSize,
+            purchasePrice: data.boxRate,
+            unitPrice: data.unitPrice,
+            batchNo: data.batchNo,
+            expiryDate: data.expiryDate,
+            qty: data.totalPcs || 100,
+            packCount: 1,
+            packRate: data.boxRate,
+            packUnit: 'box',
+          });
+          setShowScannerModal(false);
+          setActiveSection('pos_accounts');
+          setPosActiveTab('purchase_entry');
+          showToast(`বক্স স্ক্যান সফল: ${data.brandName} ক্রয় কার্টে যোগ হয়েছে`);
+        }}
+        onAddToSale={(data) => {
+          handleAddCustomToPosCart({
+            brandName: data.brandName,
+            unitPrice: data.unitPrice,
+            purchasePrice: Math.round(data.unitPrice * 0.88 * 100) / 100,
+            qty: 1,
+            saveToCatalog: true,
+          });
+          setShowScannerModal(false);
+          setActiveSection('pos_accounts');
+          setPosActiveTab('sale_pos');
+          showToast(`বক্স স্ক্যান সফল: ${data.brandName} বিক্রয় কার্টে যোগ হয়েছে`);
+        }}
+      />
     </div>
   );
 }

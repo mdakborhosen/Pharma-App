@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownRight,
   ArrowUpRight,
+  Camera,
   Edit3,
   FileText,
   Info,
@@ -186,6 +187,7 @@ interface PosAndDailyAccountsViewProps {
     },
     existingMed?: MedicineCatalogItem
   ) => Promise<any>;
+  onOpenScanner?: () => void;
 }
 
 const CUSTOM_PRODUCT_FORMS = [
@@ -248,6 +250,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
   onEditTransaction,
   onDeleteTransaction,
   onSaveMedicineCatalog,
+  onOpenScanner,
 }) => {
   const invoiceBuilderRef = useRef<HTMLDivElement | null>(null);
   const saleCustomNameInputRef = useRef<HTMLInputElement | null>(null);
@@ -511,16 +514,16 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
   // Purchase Invoice calculations
   const purchaseSubTotal = useMemo(() => {
     return purchaseCart.reduce((acc, item) => {
-      const isPack = Boolean(
-        item.packUnit &&
-        item.packUnit !== 'piece' &&
-        item.packCount &&
-        item.packCount > 0 &&
-        item.packRate &&
-        item.packRate > 0
-      );
+      const effPackRate =
+        item.packRate && item.packRate > 0
+          ? item.packRate
+          : item.purchasePrice > 0
+          ? Number((item.purchasePrice * (item.unitsPerPack || 1)).toFixed(2))
+          : 0;
+      const count = Math.max(1, item.packCount || 1);
+      const isPack = Boolean(item.packUnit && item.packUnit !== 'piece' && effPackRate > 0);
       const lineCost = isPack
-        ? Number((item.packRate! * item.packCount!).toFixed(2))
+        ? Number((effPackRate * count).toFixed(2))
         : Number((item.purchasePrice * item.qty).toFixed(2));
       return acc + lineCost;
     }, 0);
@@ -884,26 +887,30 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
     };
   };
 
-  const ensureNextPurchaseBoxOpen = (idx: number) => {
-    if (idx === purchaseCart.length - 1) {
-      const hasEmptyAtEnd = purchaseCart.length > 0 && !purchaseCart[purchaseCart.length - 1].brandName.trim();
-      if (!hasEmptyAtEnd) {
-        onAddCustomToPurchaseCart({
-          brandName: '',
-          companyName: supplierCompany,
-          strength: '',
-          dosageForm: 'Tablet',
-          purchasePrice: 0,
-          unitPrice: 0,
-          qty: 10,
-          updateStock: true,
-          packUnit: 'strip',
-          packCount: 1,
-          unitsPerPack: 10,
-          packDetailFormula: '1*10',
-          saveToCatalog: false,
-        });
-      }
+  const ensureNextPurchaseBoxOpen = (idx?: number, filledBrandName?: string) => {
+    const lastItem = purchaseCart[purchaseCart.length - 1];
+    const isLastItemBeingFilledNow =
+      idx !== undefined &&
+      idx === purchaseCart.length - 1 &&
+      Boolean(filledBrandName && filledBrandName.trim());
+
+    const hasBlankRow = !isLastItemBeingFilledNow && Boolean(lastItem && !lastItem.brandName.trim());
+    if (!hasBlankRow) {
+      onAddCustomToPurchaseCart({
+        brandName: '',
+        companyName: supplierCompany,
+        strength: '',
+        dosageForm: 'Tablet',
+        purchasePrice: 0,
+        unitPrice: 0,
+        qty: 10,
+        updateStock: true,
+        packUnit: 'strip',
+        packCount: 1,
+        unitsPerPack: 10,
+        packDetailFormula: '1*10',
+        saveToCatalog: false,
+      });
     }
   };
 
@@ -941,7 +948,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
     setActiveSearchMedId(null);
 
     // Auto 1st Line Fill 2nd Box Open
-    ensureNextPurchaseBoxOpen(idx);
+    ensureNextPurchaseBoxOpen(idx, med.brandName);
   };
 
   const handleCreateManualMedForRow = (
@@ -985,8 +992,8 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
       }).catch(console.error);
     }
 
-    // Auto open 2nd box if this is last row
-    ensureNextPurchaseBoxOpen(idx);
+    // Auto open 2nd box if this was last row / custom product added
+    ensureNextPurchaseBoxOpen(idx, customName.trim());
   };
 
   const handleAddNewPurchaseBox = () => {
@@ -1358,24 +1365,37 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
               </div>
 
               <div className="space-y-1.5">
-                <div className="relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={medSearch}
-                    onChange={(e) => setMedSearch(e.target.value)}
-                    placeholder="ওষুধের নাম লিখে সার্চ করুন (যেমন: Napa, Seclo, Noret, Femicon)..."
-                    className="w-full pl-9 pr-8 py-2 text-sm bg-slate-50 border border-slate-200 rounded-md focus:bg-white focus:border-teal-600 focus:outline-none"
-                  />
-                  {medSearch && (
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={medSearch}
+                      onChange={(e) => setMedSearch(e.target.value)}
+                      placeholder="ওষুধের নাম লিখে সার্চ করুন (যেমন: Napa, Seclo, Noret, Femicon)..."
+                      className="w-full pl-9 pr-8 py-2 text-sm bg-slate-50 border border-slate-200 rounded-md focus:bg-white focus:border-teal-600 focus:outline-none"
+                    />
+                    {medSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setMedSearch('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-full cursor-pointer transition-colors"
+                        title="সার্চ মুছে ফেলুন"
+                        aria-label="সার্চ মুছে ফেলুন"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  {onOpenScanner && (
                     <button
                       type="button"
-                      onClick={() => setMedSearch('')}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-full cursor-pointer transition-colors"
-                      title="সার্চ মুছে ফেলুন"
-                      aria-label="সার্চ মুছে ফেলুন"
+                      onClick={onOpenScanner}
+                      className="px-2.5 sm:px-3 py-2 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 rounded-md text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs whitespace-nowrap active:scale-95 transition-all"
+                      title="বক্সের উপর স্ক্যান করুন: নাম, বক্স সাইজ, দাম, ব্যাচ নম্বর ও মেয়াদ"
                     >
-                      <X className="w-3.5 h-3.5" />
+                      <Camera className="w-4 h-4 text-purple-700" />
+                      <span className="font-bold hidden sm:inline">(স্ক্যান) বক্স স্ক্যান</span>
                     </button>
                   )}
                 </div>
@@ -2142,6 +2162,24 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
               </div>
             </div>
 
+            {/* Purchase Entry Toolbar with Scan Icon */}
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+              <div className="text-xs text-slate-500 font-medium">
+                চালান বক্স তালিকা (স্বয়ংক্রিয় ২য় বক্স ওপেন ও ডাটাবেস এন্ট্রি)
+              </div>
+              {onOpenScanner && (
+                <button
+                  type="button"
+                  onClick={onOpenScanner}
+                  className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs active:scale-95 transition-all"
+                  title="বক্সের উপর স্ক্যান করুন: নাম, বক্স সাইজ, দাম, ব্যাচ নম্বর ও মেয়াদ"
+                >
+                  <Camera className="w-4 h-4 text-purple-700" />
+                  <span>(স্ক্যান) ওষুধের বক্স স্ক্যান করুন</span>
+                </button>
+              )}
+            </div>
+
             {/* The Main Box Grid Table */}
             <div className="border border-indigo-200 rounded-lg bg-white overflow-visible shadow-xs">
               <div className="overflow-x-auto">
@@ -2171,16 +2209,16 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                   </thead>
                   <tbody className="divide-y divide-slate-200">
                     {purchaseCart.map((item, idx) => {
-                      const isPackRow = Boolean(
-                        item.packUnit &&
-                        item.packUnit !== 'piece' &&
-                        item.packCount &&
-                        item.packCount > 0 &&
-                        item.packRate &&
-                        item.packRate > 0
-                      );
+                      const effectivePackRate =
+                        item.packRate && item.packRate > 0
+                          ? item.packRate
+                          : item.purchasePrice > 0
+                          ? Number((item.purchasePrice * (item.unitsPerPack || 1)).toFixed(2))
+                          : 0;
+                      const effectivePackCount = Math.max(1, item.packCount || 1);
+                      const isPackRow = Boolean(item.packUnit && item.packUnit !== 'piece' && effectivePackRate > 0);
                       const lineTotal = isPackRow
-                        ? Number((item.packRate! * item.packCount!).toFixed(2))
+                        ? Number((effectivePackRate * effectivePackCount).toFixed(2))
                         : Number((item.purchasePrice * item.qty).toFixed(2));
                       const rawCurrentStock = getStockForMed(item);
                       const oldPurQty = isEditingPurchase ? getOldEditedQtyForMed(item) : 0;
@@ -2246,7 +2284,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                                       e.preventDefault();
                                       setActiveSearchMedId(null);
                                       if (item.brandName.trim()) {
-                                        ensureNextPurchaseBoxOpen(idx);
+                                        ensureNextPurchaseBoxOpen(idx, item.brandName.trim());
                                       }
                                     }
                                   }}
@@ -2438,7 +2476,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                                       type="button"
                                       onClick={() => {
                                         const updates = updatePurchaseRowUnitAndFormula(item, 'box', {
-                                          formulaPreset: '1*10*51',
+                                          formulaPreset: '1*10*10',
                                         });
                                         onUpdatePurchaseCartItemDetails(item.medicineId, updates);
                                       }}
@@ -2865,12 +2903,42 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                             </div>
                           </td>
 
-                          {/* 5. Line Total (৳) */}
+                          {/* 5. Line Total (৳) - Two-way synced with Box & Piece Price */}
                           <td className="py-3 px-3 align-top border-r border-slate-200 text-right">
-                            <div className="font-mono font-bold text-sm text-indigo-950 tabular-nums pt-1">
-                              ৳{formatCleanMoney(lineTotal)}
+                            <label className="block text-[10px] text-slate-500 font-semibold mb-0.5 text-right">
+                              লাইন মোট (৳):
+                            </label>
+                            <div className="flex items-center justify-end gap-1">
+                              <span className="text-xs font-bold text-slate-500">৳</span>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={lineTotal > 0 ? lineTotal : ''}
+                                onChange={(e) => {
+                                  const nextLineTotal = Math.max(0, parseFloat(e.target.value) || 0);
+                                  const count = Math.max(1, item.packCount || 1);
+                                  const uPack = Math.max(1, item.unitsPerPack || 1);
+                                  if (currentPackUnit !== 'piece') {
+                                    const nextPackRate = Number((nextLineTotal / count).toFixed(2));
+                                    const nextPurPrice = Number((nextLineTotal / (count * uPack)).toFixed(4));
+                                    onUpdatePurchaseCartItemDetails(item.medicineId, {
+                                      packRate: nextPackRate,
+                                      purchasePrice: Math.max(0.01, nextPurPrice),
+                                    });
+                                  } else {
+                                    const nextPurPrice = Number((nextLineTotal / Math.max(1, item.qty)).toFixed(4));
+                                    onUpdatePurchaseCartItemDetails(item.medicineId, {
+                                      purchasePrice: Math.max(0.01, nextPurPrice),
+                                      packRate: nextLineTotal,
+                                    });
+                                  }
+                                }}
+                                placeholder="লাইন মোট"
+                                className="w-24 text-right py-1 px-1.5 text-xs font-mono font-bold tabular-nums border border-slate-300 rounded bg-white text-indigo-950 focus:border-indigo-600 focus:ring-1 focus:ring-indigo-500"
+                              />
                             </div>
-                            <div className="text-[10px] font-mono text-slate-500 mt-0.5">
+                            <div className="text-[10px] font-mono text-slate-500 mt-1">
                               {isPackRow ? (
                                 <span>
                                   {item.packCount}{' '}
@@ -3538,7 +3606,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                   ঠিকানা:- নতুনহাট,ইসলামিয়া মাদ্রাসা-৩৮০৯,চন্দ্রগঞ্জ,লক্ষীপুর।
                 </p>
                 <p className="text-xs font-mono font-bold text-slate-900">
-                  মোবাই:- 01812-358839
+                  মোবাইল:- 01812-358839
                 </p>
                 <div className="text-[11px] text-slate-700 pt-1 leading-snug space-y-0.5">
                   <div>
@@ -3576,7 +3644,7 @@ export const PosAndDailyAccountsView: React.FC<PosAndDailyAccountsViewProps> = (
                 </div>
                 <div>
                   <span className="text-slate-500">
-                    {previewInvoice.txType === 'purchase' ? 'ডিপো / ফোন: ' : 'মোবাইল: '}
+                    {previewInvoice.txType === 'purchase' ? 'ডিপো / মোবাইল: ' : 'মোবাইল: '}
                   </span>
                   <span className="font-mono text-slate-800">{previewInvoice.partyPhone}</span>
                 </div>

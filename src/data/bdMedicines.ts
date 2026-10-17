@@ -3,6 +3,7 @@ import {
   InventoryItem,
   MedicineCatalogItem,
   PurchaseCartItem,
+  PurchasePackUnit,
   Transaction,
 } from '../types';
 import {
@@ -5366,9 +5367,8 @@ export function buildSaleCartFromTransaction(
   inventory: InventoryItem[]
 ): CartItem[] {
   const parsed = parseTransactionItemsDetailed(tx.itemsSummary, catalog);
-  const cartMap = new Map<string, CartItem>();
 
-  parsed.forEach((pItem, idx) => {
+  return parsed.map((pItem, idx) => {
     const med = pItem.matchedMedicine;
     const split = splitBrandAndStrengthText(pItem.brandAndStrength);
     const brandName = med ? med.brandName : split.brandName;
@@ -5382,10 +5382,11 @@ export function buildSaleCartFromTransaction(
       dosageForm,
     });
 
-    const medicineId =
-      med?.id ||
-      invMatch?.medicineId ||
-      `custom-sale-${idx}-${brandName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    const medicineId = med?.id
+      ? `${med.id}__edit_${idx}`
+      : invMatch?.medicineId
+      ? `${invMatch.medicineId}__edit_${idx}`
+      : `custom-sale-${idx}-${brandName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 
     const baseCatalogPrice = invMatch ? invMatch.unitPrice : med ? med.unitPrice : pItem.unitPrice || 10;
     const unitPrice = pItem.unitPrice > 0 ? pItem.unitPrice : baseCatalogPrice;
@@ -5401,30 +5402,23 @@ export function buildSaleCartFromTransaction(
       ? invMatch.stockQty
       : 100;
 
-    const existing = cartMap.get(medicineId);
-    if (existing) {
-      existing.qty += Math.max(1, pItem.qty || 1);
-    } else {
-      cartMap.set(medicineId, {
-        medicineId,
-        inventoryId: invMatch?.id,
-        brandName,
-        genericName: med?.genericName || invMatch?.genericName || brandName,
-        companyName: med?.companyName || invMatch?.companyName || 'Pharmaceuticals',
-        strength,
-        dosageForm,
-        unitPrice,
-        originalUnitPrice: baseCatalogPrice,
-        purchasePrice: basePurPrice,
-        originalPurchasePrice: basePurPrice,
-        qty: Math.max(1, pItem.qty || 1),
-        availableStock: currentStock > 0 ? currentStock : 100,
-        updateStock: !pItem.tailText?.includes('নন-স্টক'),
-      });
-    }
+    return {
+      medicineId,
+      inventoryId: invMatch?.id,
+      brandName,
+      genericName: med?.genericName || invMatch?.genericName || brandName,
+      companyName: med?.companyName || invMatch?.companyName || 'Pharmaceuticals',
+      strength,
+      dosageForm,
+      unitPrice,
+      originalUnitPrice: baseCatalogPrice,
+      purchasePrice: basePurPrice,
+      originalPurchasePrice: basePurPrice,
+      qty: Math.max(1, pItem.qty || 1),
+      availableStock: currentStock > 0 ? currentStock : 100,
+      updateStock: !pItem.tailText?.includes('নন-স্টক'),
+    };
   });
-
-  return Array.from(cartMap.values());
 }
 
 export function buildPurchaseCartFromTransaction(
@@ -5433,9 +5427,8 @@ export function buildPurchaseCartFromTransaction(
   inventory: InventoryItem[]
 ): PurchaseCartItem[] {
   const parsed = parseTransactionItemsDetailed(tx.itemsSummary, catalog);
-  const cartMap = new Map<string, PurchaseCartItem>();
 
-  parsed.forEach((pItem, idx) => {
+  const items: PurchaseCartItem[] = parsed.map((pItem, idx) => {
     const med = pItem.matchedMedicine;
     const split = splitBrandAndStrengthText(pItem.brandAndStrength);
     const brandName = med ? med.brandName : split.brandName;
@@ -5449,27 +5442,82 @@ export function buildPurchaseCartFromTransaction(
       dosageForm,
     });
 
-    const medicineId =
-      med?.id ||
-      invMatch?.medicineId ||
-      `custom-pur-${idx}-${brandName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    const medicineId = med?.id
+      ? `${med.id}__edit_${idx}`
+      : invMatch?.medicineId
+      ? `${invMatch.medicineId}__edit_${idx}`
+      : `custom-pur-${idx}-${brandName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+
+    const isStrip = Boolean(pItem.packDetail?.includes('পাতা'));
+    const isBox = Boolean(pItem.packDetail?.includes('বক্স'));
+    const isCartoon = Boolean(pItem.packDetail?.includes('কার্টুন'));
+    const packUnit: PurchasePackUnit = isStrip ? 'strip' : isBox ? 'box' : isCartoon ? 'cartoon' : 'piece';
+
+    const countMatch = (pItem.packDetail || '').match(/(\d+)\s*(?:পাতা|বক্স|কার্টুন|পিস)?/);
+    const packCount = countMatch ? Math.max(1, parseInt(countMatch[1], 10)) : 1;
+
+    const formulaMatch = (pItem.packDetail || '').match(/\(([^)]+)\)/);
+    let packDetailFormula = formulaMatch ? formulaMatch[1].trim() : '';
+    if (!packDetailFormula) {
+      packDetailFormula = packUnit === 'strip' ? '1*10' : packUnit === 'box' ? '1*10*10' : packUnit === 'cartoon' ? '1*48' : '১ পিস';
+    }
+
+    let unitsPerPack = 10;
+    let stripsPerBox = 10;
+    let pcsPerStrip = 10;
+
+    if (packUnit === 'piece') {
+      unitsPerPack = 1;
+    } else if (packUnit === 'strip') {
+      const parts = packDetailFormula.split('*').map((p) => parseInt(p.trim(), 10)).filter((n) => !isNaN(n) && n > 0);
+      unitsPerPack = parts.length >= 2 ? parts[0] * parts[1] : parts[0] || (med?.unitsPerStrip || 10);
+      pcsPerStrip = unitsPerPack;
+    } else if (packUnit === 'box') {
+      const parts = packDetailFormula.split('*').map((p) => parseInt(p.trim(), 10)).filter((n) => !isNaN(n) && n > 0);
+      if (parts.length >= 3) {
+        pcsPerStrip = parts[1];
+        stripsPerBox = parts[2];
+        unitsPerPack = parts[0] * parts[1] * parts[2];
+      } else if (parts.length >= 2) {
+        unitsPerPack = parts[0] * parts[1];
+        stripsPerBox = parts[1];
+      } else {
+        unitsPerPack = 100;
+        stripsPerBox = 10;
+        pcsPerStrip = 10;
+      }
+    } else if (packUnit === 'cartoon') {
+      const parts = packDetailFormula.split('*').map((p) => parseInt(p.trim(), 10)).filter((n) => !isNaN(n) && n > 0);
+      unitsPerPack = parts.length >= 2 ? parts[0] * parts[1] : parts[0] || 48;
+    }
+
+    const rateMatch = (pItem.packDetail || '').match(/@৳([\d.]+)\/দর/);
+    let packRate = rateMatch ? parseFloat(rateMatch[1]) : 0;
+    if ((!packRate || packRate <= 0) && packUnit !== 'piece' && pItem.lineTotal > 0 && packCount > 0) {
+      packRate = Number((pItem.lineTotal / packCount).toFixed(2));
+    }
+
+    let purchasePrice = pItem.unitPrice;
+    if ((!purchasePrice || purchasePrice <= 0) && packRate > 0 && unitsPerPack > 0) {
+      purchasePrice = Number((packRate / unitsPerPack).toFixed(4));
+    }
+    if ((!purchasePrice || purchasePrice <= 0) && pItem.lineTotal > 0 && pItem.qty > 0) {
+      purchasePrice = Number((pItem.lineTotal / pItem.qty).toFixed(4));
+    }
+    if (!purchasePrice || purchasePrice <= 0) {
+      purchasePrice = med?.purchasePrice || (med ? Number((med.unitPrice * 0.88).toFixed(2)) : 8.8);
+    }
+    if (!packRate && packUnit !== 'piece') {
+      packRate = Number((purchasePrice * unitsPerPack).toFixed(2));
+    }
 
     const retailMrp = invMatch
       ? invMatch.unitPrice
       : med
       ? med.unitPrice
-      : pItem.unitPrice > 0
-      ? Number((pItem.unitPrice / 0.88).toFixed(2))
+      : purchasePrice > 0
+      ? Number((purchasePrice / 0.88).toFixed(2))
       : 10;
-
-    const purchasePrice =
-      pItem.unitPrice > 0
-        ? pItem.unitPrice
-        : invMatch
-        ? invMatch.purchasePrice
-        : med && typeof med.purchasePrice === 'number' && med.purchasePrice > 0
-        ? med.purchasePrice
-        : Number((retailMrp * 0.88).toFixed(2));
 
     const currentStock = med
       ? getInventoryStockForMedicine(inventory, med)
@@ -5477,44 +5525,64 @@ export function buildPurchaseCartFromTransaction(
       ? invMatch.stockQty
       : 0;
 
-    const existing = cartMap.get(medicineId);
-    if (existing) {
-      existing.qty += Math.max(1, pItem.qty || 1);
-    } else {
-      cartMap.set(medicineId, {
-        medicineId,
-        inventoryId: invMatch?.id,
-        brandName,
-        genericName: med?.genericName || invMatch?.genericName || brandName,
-        companyName:
-          med?.companyName ||
-          invMatch?.companyName ||
-          tx.partyName.replace(/\s*\(ডিপো চালান\)\s*$/, '').trim() ||
-          'Pharmaceuticals',
-        strength,
-        dosageForm,
-        packSize: med?.packSize || invMatch?.packSize || '10 × 10 (100 pcs)',
-        purchasePrice,
-        unitPrice: retailMrp,
-        qty: Math.max(1, pItem.qty || 1),
-        batchNo: invMatch?.batchNo || `B-${Math.floor(1000 + Math.random() * 9000)}`,
-        expiryDate: invMatch?.expiryDate || '2028-06-30',
-        availableStock: currentStock,
-        updateStock: !pItem.tailText?.includes('নন-স্টক'),
-        packUnit: pItem.packDetail?.includes('পাতা')
-          ? 'strip'
-          : pItem.packDetail?.includes('বক্স')
-          ? 'box'
-          : pItem.packDetail?.includes('কার্টুন')
-          ? 'cartoon'
-          : 'piece',
-        packCount: parseInt((pItem.packDetail || '').match(/^(\d+)/)?.[1] || '1', 10) || 1,
-        packDetailFormula: (pItem.packDetail || '').match(/\((.*?)\)/)?.[1] || '',
-      });
-    }
+    const totalQty = pItem.qty > 0 ? pItem.qty : packCount * unitsPerPack;
+
+    return {
+      medicineId,
+      inventoryId: invMatch?.id,
+      brandName,
+      genericName: med?.genericName || invMatch?.genericName || brandName,
+      companyName:
+        med?.companyName ||
+        invMatch?.companyName ||
+        tx.partyName.replace(/\s*\(ডিপো চালান\)\s*$/, '').trim() ||
+        'Pharmaceuticals',
+      strength,
+      dosageForm,
+      packSize: med?.packSize || invMatch?.packSize || packDetailFormula || '10 × 10 (100 pcs)',
+      purchasePrice,
+      unitPrice: retailMrp,
+      qty: Math.max(1, totalQty),
+      batchNo: invMatch?.batchNo || `B-${Math.floor(1000 + Math.random() * 9000)}`,
+      expiryDate: invMatch?.expiryDate || '2028-06-30',
+      availableStock: currentStock,
+      updateStock: !pItem.tailText?.includes('নন-স্টক'),
+      packUnit,
+      packCount,
+      unitsPerPack,
+      packRate,
+      packDetailFormula,
+      stripsPerBox,
+      pcsPerStrip,
+    };
   });
 
-  return Array.from(cartMap.values());
+  // Always append a trailing blank box so user can enter the next row immediately
+  const blankRow: PurchaseCartItem = {
+    medicineId: `box_${Date.now()}_blank`,
+    brandName: '',
+    genericName: '',
+    companyName: tx.partyName.replace(/\s*\(ডিপো চালান\)\s*$/, '').trim() || BD_PHARMA_COMPANIES[0],
+    strength: '',
+    dosageForm: 'Tablet',
+    packSize: '1*10',
+    purchasePrice: 0,
+    unitPrice: 0,
+    qty: 10,
+    batchNo: `B-${Math.floor(1000 + Math.random() * 9000)}`,
+    expiryDate: '2028-06-30',
+    availableStock: 0,
+    updateStock: true,
+    packUnit: 'strip',
+    packCount: 1,
+    unitsPerPack: 10,
+    packRate: 0,
+    packDetailFormula: '1*10',
+    stripsPerBox: 10,
+    pcsPerStrip: 10,
+  };
+
+  return [...items, blankRow];
 }
 
 
