@@ -4682,22 +4682,13 @@ export default function App() {
     {unreadAlertsCount}
   </button>
 </span>
-</div> {/* এখানে অতিরিক্ত কোনো div বা ট্যাগ থাকলে তা মিলিয়ে নিন */}
-                  const found = staffList.find((s) => s.id === e.target.value);
-                  if (found) {
-                    setActiveStaff(found);
-                    showToast(`সক্রিয় অপারেটর: ${getOperatorName(found)}`);
-                  }
-                }}
-                aria-label="সক্রিয় অপারেটর নির্বাচন"
-                className="w-full px-2.5 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-md"
-              >
-                {staffList.map((st) => (
-                  <option key={st.id} value={st.id}>
-                    {st.roleTitle === 'owner' ? 'Owner' : st.name} — {st.counterName}
-                  </option>
-                ))}
-              </select>
+<button className="...">
+            <span>
+              {unreadAlertsCount}
+            </span>
+          </button>
+        </span>
+      </header>
               <div className="text-xs text-slate-500">
                 সেল এন্ট্রিতে নাম দেখাবে:{' '}
                 <strong className="text-slate-900">{getOperatorName(activeStaff)}</strong>
